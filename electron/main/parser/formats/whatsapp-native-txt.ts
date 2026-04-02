@@ -250,8 +250,18 @@ async function* parseWhatsApp(options: ParseOptions): AsyncGenerator<ParseEvent,
   // 保存当前消息
   const saveCurrentMessage = () => {
     if (currentMessage) {
-      const content = currentMessage.contentLines.join('\n').trim()
-      const type = detectMessageType(content)
+      // 只移除开头和结尾的空行，但保留内容的原始空白
+      const contentLines = currentMessage.contentLines
+
+      while (contentLines.length > 0 && contentLines[0].trim() === '') {
+        contentLines.shift()
+      }
+      while (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === '') {
+        contentLines.pop()
+      }
+
+      const content = contentLines.length > 0 ? contentLines.join('\n') : null
+      const type = content ? detectMessageType(content) : MessageType.TEXT
 
       // 系统消息使用特殊 ID 和统一名称
       const senderPlatformId = currentMessage.sender || 'system'
@@ -262,7 +272,7 @@ async function* parseWhatsApp(options: ParseOptions): AsyncGenerator<ParseEvent,
         senderAccountName: senderName,
         timestamp: currentMessage.timestamp,
         type,
-        content: content || null,
+        content,
       })
 
       // 更新成员信息（跳过系统消息）
