@@ -31,6 +31,12 @@ class MainProcess {
 
   // 单例锁
   async checkApp() {
+    // E2E 测试模式：绕过单实例锁以支持并行实例
+    const isTestMode = process.env.TEST_MODE === 'true'
+    if (isTestMode) {
+      return true
+    }
+
     if (!app.requestSingleInstanceLock()) {
       app.quit()
       // 未获得锁
