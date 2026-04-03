@@ -12,6 +12,7 @@ import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useLLMStore } from '@/stores/llm'
+import { initializeWebUI } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -28,6 +29,13 @@ const tooltip = {
 
 // 应用启动时初始化
 onMounted(async () => {
+  // 初始化 Web UI 环境
+  try {
+    initializeWebUI()
+  } catch (err) {
+    console.error('[App] Web UI initialization error:', err)
+  }
+
   // 平台检测 - 设置 CSS 类名以驱动平台差异化样式（如标题栏安全区域高度）
   const platform = navigator.platform.toLowerCase()
   if (platform.includes('win')) {
