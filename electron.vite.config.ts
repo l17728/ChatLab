@@ -52,6 +52,8 @@ export default defineConfig(() => {
       root: 'src/',
       build: {
         sourcemap: false,
+        // Web UI output to separate directory for static serving
+        outDir: '../out/web-ui',
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/index.html'),

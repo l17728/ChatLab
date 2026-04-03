@@ -11,6 +11,8 @@ import { registerSessionRoutes } from './routes/sessions'
 import { registerImportRoutes } from './routes/import'
 import { registerWebUIRoutes } from './routes/webui'
 import { registerAdminRoutes } from './routes/admin'
+import { registerStaticFiles } from './static'
+import { join } from 'path'
 
 let server: FastifyInstance | null = null
 let startedAt: number | null = null
@@ -49,6 +51,17 @@ export async function start(): Promise<void> {
     registerImportRoutes(server)
     registerWebUIRoutes(server)
     registerAdminRoutes(server)
+
+    // Register static file serving for Web UI
+    const buildOutDir = join(__dirname, '../../out/web-ui')
+    await registerStaticFiles(server, {
+      enabled: true,
+      root: buildOutDir,
+      prefix: '/',
+      spaFallback: true,
+      corsEnabled: true,
+      securityHeadersEnabled: true,
+    })
 
     await server.listen({ port: config.port, host: '127.0.0.1' })
     startedAt = Math.floor(Date.now() / 1000)
