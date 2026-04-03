@@ -27,6 +27,9 @@
     "type-check:all": "npm run type-check:web && npm run type-check:node",
     "type-check": "vue-tsc --noEmit -p tsconfig.web.json",
     "test:agent-context": "node --experimental-strip-types --test electron/main/ai/context/sessionLog.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "PWHEADLESS=false playwright test",
     "postinstall": "electron-rebuild"
   },
   "dependencies": {
@@ -74,6 +77,8 @@
     "tailwindcss": "^4.0.0",
     "vite": "^6.3.5",
     "vue": "^3.5.25",
-    "vue-router": "^4.6.3"
+    "vue-router": "^4.6.3",
+    "@playwright/test": "^1.49.0",
+    "node-fetch": "^3.3.2"
   }
 }
