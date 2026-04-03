@@ -4,11 +4,47 @@
  * Comprehensive test coverage for all user operations
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import * as userDb from '../../electron/main/api/user-db'
 import * as authDb from '../../electron/main/api/auth-db'
+import * as fs from 'fs-extra'
+import * as path from 'path'
+
+// Mock Electron app module
+vi.mock('electron', () => ({
+  app: {
+    getPath: (name: string) => {
+      if (name === 'userData') {
+        return path.join(process.cwd(), '.test-data')
+      }
+      return `/tmp/${name}`
+    },
+  },
+}))
+
+// ==================== Test Setup ====================
+const TEST_DB_DIR = path.join(process.cwd(), '.test-data')
+const TEST_DB_PATH = path.join(TEST_DB_DIR, 'webui-users.json')
+
+function resetDatabase(): void {
+  try {
+    if (fs.existsSync(TEST_DB_PATH)) {
+      fs.removeSync(TEST_DB_PATH)
+    }
+  } catch (e) {
+    // Ignore cleanup errors
+  }
+}
 
 describe('Phase 3: User Management & Authentication', () => {
+  beforeEach(() => {
+    resetDatabase()
+  })
+
+  afterEach(() => {
+    resetDatabase()
+  })
+
   // ==================== User Database Tests ====================
 
   describe('User Registration (registerUser)', () => {
