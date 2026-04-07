@@ -7,6 +7,7 @@ import type { RankItem } from '@/components/charts'
 import { LoadingState } from '@/components/UI'
 import { getRankBadgeClass } from '@/utils'
 import { usePromptStore } from '@/stores/prompt'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -308,9 +309,19 @@ async function loadAnalysis() {
 
   isLoading.value = true
   try {
-    analysis.value = await window.chatApi.getLaughAnalysis(props.sessionId, props.timeFilter, [
-      ...currentKeywords.value,
-    ])
+    if (isBrowserEnvironment()) {
+      const qs = new URLSearchParams()
+      if (props.timeFilter?.startTs) qs.set('startTime', String(props.timeFilter.startTs))
+      if (props.timeFilter?.endTs) qs.set('endTime', String(props.timeFilter.endTs))
+      qs.set('keywords', currentKeywords.value.join(','))
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/stats/laugh?${qs}`)
+      const json = await res.json()
+      analysis.value = json.data
+    } else {
+      analysis.value = await window.chatApi.getLaughAnalysis(props.sessionId, props.timeFilter, [
+        ...currentKeywords.value,
+      ])
+    }
   } catch (error) {
     console.error('加载词频分析失败:', error)
     analysis.value = null

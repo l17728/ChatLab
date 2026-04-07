@@ -1,5 +1,6 @@
 /**
  * chart-cluster 数据查询
+ * 通过 pluginQuery/pluginCompute 适配器执行（兼容 Electron IPC 和 Web UI HTTP）
  *
  * 将原 getClusterGraph 后端函数拆解为：
  * 1. 两个 SQL 查询获取原始数据（成员 + 消息）
@@ -7,6 +8,7 @@
  *    （时间衰减评分、归一化、混合评分、排序、节点度数计算）
  */
 
+import { pluginQuery, pluginCompute } from '@/composables/usePluginApi'
 import type { MemberRow, MessageRow, ClusterGraphData, ClusterGraphOptions, BuildClusterInput } from './types'
 
 interface TimeFilter {
@@ -46,7 +48,7 @@ function buildFilter(filter?: TimeFilter): { conditions: string; params: any[] }
  * 查询所有成员（含消息数）
  */
 async function queryMembers(sessionId: string): Promise<MemberRow[]> {
-  return window.chatApi.pluginQuery<MemberRow>(
+  return pluginQuery<MemberRow>(
     sessionId,
     `SELECT
        id,
@@ -64,7 +66,7 @@ async function queryMembers(sessionId: string): Promise<MemberRow[]> {
 async function queryMessages(sessionId: string, timeFilter?: TimeFilter): Promise<MessageRow[]> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  return window.chatApi.pluginQuery<MessageRow>(
+  return pluginQuery<MessageRow>(
     sessionId,
     `SELECT msg.sender_id as senderId, msg.ts as ts
      FROM message msg
@@ -325,7 +327,7 @@ export async function loadClusterGraph(
       ...userOptions,
     }
 
-    const result = await window.chatApi.pluginCompute<ClusterGraphData>(buildClusterGraph.toString(), {
+    const result = await pluginCompute<ClusterGraphData>(buildClusterGraph.toString(), {
       members,
       messages,
       options: mergedOptions,

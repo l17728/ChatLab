@@ -3,6 +3,7 @@ import { ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MemberWithStats } from '@/types/analysis'
 import OwnerSelector from '@/components/analysis/member/OwnerSelector.vue'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -64,15 +65,30 @@ async function loadMembers() {
   if (!props.sessionId) return
   isLoading.value = true
   try {
-    const result = await window.chatApi.getMembersPaginated(props.sessionId, {
-      page: currentPage.value,
-      pageSize,
-      search: searchQuery.value.trim(),
-      sortOrder: sortOrder.value,
-    })
-    members.value = result.members
-    total.value = result.total
-    totalPages.value = result.totalPages
+    if (isBrowserEnvironment()) {
+      const qs = new URLSearchParams({
+        page: String(currentPage.value),
+        pageSize: String(pageSize),
+        sortOrder: sortOrder.value,
+      })
+      if (searchQuery.value.trim()) qs.set('search', searchQuery.value.trim())
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/members/paginated?${qs}`)
+      const json = await res.json()
+      const result = json.data || {}
+      members.value = result.members || []
+      total.value = result.total || 0
+      totalPages.value = result.totalPages || 0
+    } else {
+      const result = await window.chatApi.getMembersPaginated(props.sessionId, {
+        page: currentPage.value,
+        pageSize,
+        search: searchQuery.value.trim(),
+        sortOrder: sortOrder.value,
+      })
+      members.value = result.members
+      total.value = result.total
+      totalPages.value = result.totalPages
+    }
   } catch (error) {
     console.error('加载成员列表失败:', error)
   } finally {
@@ -84,7 +100,13 @@ async function loadMembers() {
 async function loadAllMembers() {
   if (!props.sessionId) return
   try {
-    allMembers.value = await window.chatApi.getMembers(props.sessionId)
+    if (isBrowserEnvironment()) {
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/members`)
+      const json = await res.json()
+      allMembers.value = json.data || []
+    } else {
+      allMembers.value = await window.chatApi.getMembers(props.sessionId)
+    }
   } catch (error) {
     console.error('加载所有成员失败:', error)
   }

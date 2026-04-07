@@ -1,8 +1,9 @@
 /**
  * chart-ranking SQL 查询与计算
- * 通过 pluginQuery (SQL) + pluginCompute (计算) 在 Worker 线程执行
+ * 通过 pluginQuery/pluginCompute 适配器执行（兼容 Electron IPC 和 Web UI HTTP）
  */
 
+import { pluginQuery, pluginCompute } from '@/composables/usePluginApi'
 import type {
   DragonKingAnalysis,
   DragonKingRankItem,
@@ -47,7 +48,7 @@ export async function queryDragonKingAnalysis(sessionId: string, timeFilter?: Ti
   const { conditions, params } = buildFilter(timeFilter)
 
   const [rankRows, totalRow] = await Promise.all([
-    window.chatApi.pluginQuery<{
+    pluginQuery<{
       sender_id: number
       platform_id: string
       name: string
@@ -78,7 +79,7 @@ export async function queryDragonKingAnalysis(sessionId: string, timeFilter?: Ti
       ORDER BY dragon_days DESC`,
       params
     ),
-    window.chatApi.pluginQuery<{ total: number }>(
+    pluginQuery<{ total: number }>(
       sessionId,
       `SELECT COUNT(DISTINCT strftime('%Y-%m-%d', msg.ts, 'unixepoch', 'localtime')) as total
        FROM message msg
@@ -105,7 +106,7 @@ export async function queryDragonKingAnalysis(sessionId: string, timeFilter?: Ti
 export async function queryDivingAnalysis(sessionId: string, timeFilter?: TimeFilter): Promise<DivingAnalysis> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  const rows = await window.chatApi.pluginQuery<{
+  const rows = await pluginQuery<{
     member_id: number
     platform_id: string
     name: string
@@ -254,7 +255,7 @@ function computeCheckIn(input: {
 export async function queryCheckInAnalysis(sessionId: string, timeFilter?: TimeFilter): Promise<CheckInAnalysis> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  const dailyActivity = await window.chatApi.pluginQuery<{
+  const dailyActivity = await pluginQuery<{
     senderId: number
     name: string
     day: string
@@ -276,7 +277,7 @@ export async function queryCheckInAnalysis(sessionId: string, timeFilter?: TimeF
     return { streakRank: [], loyaltyRank: [], totalDays: 0 }
   }
 
-  return window.chatApi.pluginCompute<CheckInAnalysis>(computeCheckIn.toString(), { dailyActivity })
+  return pluginCompute<CheckInAnalysis>(computeCheckIn.toString(), { dailyActivity })
 }
 
 // ==================== 斗图分析 ====================
@@ -408,7 +409,7 @@ function computeMemeBattle(input: {
 export async function queryMemeBattleAnalysis(sessionId: string, timeFilter?: TimeFilter): Promise<MemeBattleAnalysis> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  const messages = await window.chatApi.pluginQuery<{
+  const messages = await pluginQuery<{
     senderId: number
     type: number
     ts: number
@@ -433,7 +434,7 @@ export async function queryMemeBattleAnalysis(sessionId: string, timeFilter?: Ti
     return { topBattles: [], rankByCount: [], rankByImageCount: [], totalBattles: 0 }
   }
 
-  return window.chatApi.pluginCompute<MemeBattleAnalysis>(computeMemeBattle.toString(), { messages })
+  return pluginCompute<MemeBattleAnalysis>(computeMemeBattle.toString(), { messages })
 }
 
 // ==================== 夜猫分析 ====================
@@ -715,7 +716,7 @@ function computeNightOwl(input: {
 export async function queryNightOwlAnalysis(sessionId: string, timeFilter?: TimeFilter): Promise<NightOwlAnalysis> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  const messages = await window.chatApi.pluginQuery<{
+  const messages = await pluginQuery<{
     id: number
     senderId: number
     ts: number
@@ -747,7 +748,7 @@ export async function queryNightOwlAnalysis(sessionId: string, timeFilter?: Time
     }
   }
 
-  return window.chatApi.pluginCompute<NightOwlAnalysis>(computeNightOwl.toString(), { messages })
+  return pluginCompute<NightOwlAnalysis>(computeNightOwl.toString(), { messages })
 }
 
 // ==================== 复读分析 ====================
@@ -947,7 +948,7 @@ function computeRepeat(input: {
 export async function queryRepeatAnalysis(sessionId: string, timeFilter?: TimeFilter): Promise<RepeatAnalysis> {
   const { conditions, params } = buildFilter(timeFilter)
 
-  const messages = await window.chatApi.pluginQuery<{
+  const messages = await pluginQuery<{
     id: number
     senderId: number
     content: string
@@ -990,5 +991,5 @@ export async function queryRepeatAnalysis(sessionId: string, timeFilter?: TimeFi
     }
   }
 
-  return window.chatApi.pluginCompute<RepeatAnalysis>(computeRepeat.toString(), { messages })
+  return pluginCompute<RepeatAnalysis>(computeRepeat.toString(), { messages })
 }

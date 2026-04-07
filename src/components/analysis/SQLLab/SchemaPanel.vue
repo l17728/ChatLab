@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { TableSchema } from './types'
 import { getTableLabel, getColumnLabel } from './types'
 import type { LocaleType } from '@/i18n/types'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 const { t, locale } = useI18n()
 
@@ -25,7 +26,14 @@ const expandedTables = ref<Set<string>>(new Set())
 // 加载 Schema
 async function loadSchema() {
   try {
-    schema.value = await window.chatApi.getSchema(props.sessionId)
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const res = await fetch(`${baseUrl}/api/v1/sessions/${props.sessionId}/sql/schema`)
+      const json = await res.json()
+      schema.value = json.data
+    } else {
+      schema.value = await window.chatApi.getSchema(props.sessionId)
+    }
     // 默认展开所有表
     schema.value.forEach((table) => expandedTables.value.add(table.name))
   } catch (err) {

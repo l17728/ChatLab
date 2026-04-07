@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MemberWithStats } from '@/types/analysis'
 import OwnerSelector from '@/components/analysis/member/OwnerSelector.vue'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -45,7 +46,13 @@ async function loadMembers() {
   if (!props.sessionId) return
   isLoading.value = true
   try {
-    members.value = await window.chatApi.getMembers(props.sessionId)
+    if (isBrowserEnvironment()) {
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/members`)
+      const json = await res.json()
+      members.value = json.data || []
+    } else {
+      members.value = await window.chatApi.getMembers(props.sessionId)
+    }
   } catch (error) {
     console.error('加载成员列表失败:', error)
   } finally {

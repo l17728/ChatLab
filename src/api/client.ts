@@ -17,7 +17,7 @@ function isElectronEnvironment(): boolean {
       (window as any).electron ||
       (window as any).chatApi ||
       (window as any).aiApi ||
-      process?.versions?.electron
+      (typeof process !== 'undefined' && process?.versions?.electron)
     )
   }
   return false

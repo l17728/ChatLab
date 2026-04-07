@@ -495,6 +495,9 @@ const formatDate = (date: string | number | Date) => {
 onMounted(async () => {
   console.log('[Settings] Component mounted')
 
+  // Check authentication (restore token from localStorage if needed)
+  await auth.checkAuth()
+
   // Check authentication
   if (!auth.isAuthenticated.value) {
     console.log('[Settings] Not authenticated, redirecting to login')

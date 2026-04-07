@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 export const router = createRouter({
   routes: [
@@ -7,7 +8,7 @@ export const router = createRouter({
       path: '/login',
       name: 'webui-login',
       component: () => import('@/pages/Login.vue'),
-      meta: { title: 'Login - ChatLab Web UI' },
+      meta: { title: 'Login - ChatLab Web UI', requiresAuth: false },
     },
     {
       path: '/dashboard',
@@ -47,13 +48,63 @@ export const router = createRouter({
   history: createWebHashHistory(),
 })
 
-router.beforeEach(async (to, _from, next) => {
-  // Check if route requires authentication
-  if (to.meta.requiresAuth) {
-    // In a real implementation, check if user is authenticated
-    // For now, allow navigation
-    console.log('[Router] Route requires auth:', to.name)
+/**
+ * Check if user has valid authentication token
+ */
+function hasValidToken(): boolean {
+  const token = localStorage.getItem('chatlab_token')
+  const expiresAt = localStorage.getItem('chatlab_token_expires_at')
+
+  if (!token || !expiresAt) {
+    console.log('[Router Auth] No token found in localStorage')
+    return false
   }
+
+  const expiresAtNum = parseInt(expiresAt, 10)
+  const isExpired = expiresAtNum <= Date.now()
+
+  if (isExpired) {
+    console.log('[Router Auth] Token expired at', new Date(expiresAtNum).toISOString())
+    localStorage.removeItem('chatlab_token')
+    localStorage.removeItem('chatlab_token_expires_at')
+    return false
+  }
+
+  console.log('[Router Auth] Valid token found, expires at', new Date(expiresAtNum).toISOString())
+  return true
+}
+
+router.beforeEach(async (to, from, next) => {
+  const isWebUI = isBrowserEnvironment()
+  const requiresAuth = (to.meta.requiresAuth as boolean) ?? false
+
+  console.log(`[Router Guard] Navigating to ${to.path} (${to.name})`, {
+    isWebUI,
+    requiresAuth,
+    hasToken: !!localStorage.getItem('chatlab_token'),
+  })
+
+  // In browser/webUI mode, redirect root path to dashboard
+  if (to.path === '/' && isWebUI) {
+    console.log('[Router Guard] WebUI mode: redirecting / to /dashboard')
+    return next('/dashboard')
+  }
+
+  // Web UI authentication guard
+  if (isWebUI) {
+    // If route requires auth and user is not authenticated
+    if (requiresAuth && !hasValidToken()) {
+      console.log(`[Router Guard] Route ${to.path} requires auth but user not authenticated, redirecting to /login`)
+      return next('/login')
+    }
+
+    // If user is authenticated and trying to access login page, redirect to dashboard
+    if (to.name === 'webui-login' && hasValidToken()) {
+      console.log('[Router Guard] User already authenticated, redirecting from /login to /dashboard')
+      return next('/dashboard')
+    }
+  }
+
   next()
 })
 

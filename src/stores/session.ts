@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { AnalysisSession, ImportProgress } from '@/types/base'
+import { getApiClient } from '@/api/client'
 
 /** 迁移信息 */
 export interface MigrationInfo {
@@ -152,15 +153,35 @@ export const useSessionStore = defineStore(
      */
     async function loadSessions() {
       try {
-        const list = await window.chatApi.getSessions()
-        sessions.value = list
+        const apiClient = getApiClient()
+        console.log('[SessionStore] loadSessions - client type:', apiClient.isElectron() ? 'Electron IPC' : 'HTTP')
+        const response = await apiClient.listSessions()
+        console.log('[SessionStore] listSessions response:', JSON.stringify(response).slice(0, 500))
+
+        // 处理不同的响应格式
+        // HTTP API 返回: { success, data: [...], meta }
+        // Electron IPC 返回: { success, sessions: [...] }
+        if (response.success) {
+          const responseData = response as any
+          const sessionsData = responseData.data || responseData.sessions || []
+          console.log(
+            '[SessionStore] Extracted sessionsData:',
+            Array.isArray(sessionsData) ? `${sessionsData.length} items` : typeof sessionsData
+          )
+          sessions.value = Array.isArray(sessionsData) ? sessionsData : []
+        } else {
+          console.warn('[SessionStore] listSessions returned failure:', (response as any).error)
+          sessions.value = []
+        }
+
         // 如果当前选中的会话不存在了，清除选中状态
-        if (currentSessionId.value && !list.find((s) => s.id === currentSessionId.value)) {
+        if (currentSessionId.value && !sessions.value.find((s) => s.id === currentSessionId.value)) {
           currentSessionId.value = null
         }
+        console.log('[SessionStore] loadSessions complete:', sessions.value.length, 'sessions, isInitialized=true')
         isInitialized.value = true
       } catch (error) {
-        console.error('加载会话列表失败:', error)
+        console.error('[SessionStore] 加载会话列表失败:', error)
         isInitialized.value = true
       }
     }

@@ -1,0 +1,69 @@
+- generic [active] [ref=e102]:
+  - generic [ref=e104]:
+    - generic [ref=e105]:
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - generic [ref=e108]:
+            - generic [ref=e109]: ChatLab
+            - generic [ref=e110]: vWeb
+          - button [ref=e111] [cursor=pointer]:
+            - img [ref=e112]
+        - button "分析新聊天" [ref=e114] [cursor=pointer]:
+          - img [ref=e115]
+          - generic [ref=e117]: 分析新聊天
+      - generic [ref=e118]:
+        - generic [ref=e120]:
+          - generic [ref=e121]:
+            - generic [ref=e122]: 聊天对话
+            - img [ref=e123]
+          - button [ref=e125]:
+            - img [ref=e126]
+        - generic [ref=e1] [cursor=pointer]:
+          - img [ref=e3]
+          - generic [ref=e4]:
+            - paragraph [ref=e6]: 技术交流群
+            - paragraph [ref=e7]: 74 条消息 · 5 days ago
+      - button "设置" [ref=e132] [cursor=pointer]:
+        - img [ref=e133]
+        - generic [ref=e137]: 设置
+    - main [ref=e138]:
+      - generic [ref=e140]:
+        - generic [ref=e141]:
+          - generic [ref=e142]:
+            - heading "ChatLab" [level=1] [ref=e144]
+            - paragraph [ref=e146]: 重构你的社交记忆
+          - generic [ref=e147]:
+            - generic [ref=e148]:
+              - img [ref=e149]
+              - generic [ref=e151]: 隐私至上
+            - generic [ref=e152]:
+              - img [ref=e153]
+              - generic [ref=e155]: 多维度分析
+            - generic [ref=e156]:
+              - img [ref=e157]
+              - generic [ref=e159]: 智能 Agent
+          - generic [ref=e160]:
+            - generic [ref=e162] [cursor=pointer]:
+              - img [ref=e164]
+              - generic [ref=e166]:
+                - paragraph [ref=e167]: 点击选择或拖拽聊天记录导入
+                - paragraph [ref=e168]: 支持同时选择或拖拽多个文件
+            - generic [ref=e170]:
+              - generic [ref=e171]:
+                - checkbox "合并导入" [ref=e173]
+                - generic [ref=e175]: 合并导入
+              - img [ref=e176]
+            - link "点此查看聊天记录导入教程" [ref=e178] [cursor=pointer]:
+              - /url: https://chatlab.fun/cn/usage/how-to-export.html?utm_source=app
+              - text: 点此查看聊天记录导入教程
+              - img [ref=e179]
+        - generic [ref=e182]:
+          - button "官网" [ref=e183]
+          - generic [ref=e184]: ·
+          - button "Github" [ref=e185]
+          - generic [ref=e186]: ·
+          - button "使用条款" [ref=e187]
+          - generic [ref=e188]: ·
+          - button "版本日志" [ref=e189]
+  - region "Notifications (F8)":
+    - list

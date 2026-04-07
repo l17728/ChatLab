@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -39,7 +40,14 @@ const isCollapsed = ref(false)
 async function loadConversations() {
   isLoading.value = true
   try {
-    conversations.value = await window.aiApi.getConversations(props.sessionId)
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const res = await fetch(`${baseUrl}/api/v1/sessions/${props.sessionId}/ai/conversations`)
+      const json = await res.json()
+      conversations.value = json.data || []
+    } else {
+      conversations.value = await window.aiApi.getConversations(props.sessionId)
+    }
   } catch (error) {
     console.error('加载对话列表失败：', error)
   } finally {
@@ -78,7 +86,16 @@ async function saveTitle(convId: string) {
   if (props.disabled) return
   if (editingTitle.value.trim()) {
     try {
-      await window.aiApi.updateConversationTitle(convId, editingTitle.value.trim())
+      if (isBrowserEnvironment()) {
+        const baseUrl = getApiServerUrl()
+        await fetch(`${baseUrl}/api/v1/ai/conversations/${convId}/title`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: editingTitle.value.trim() }),
+        })
+      } else {
+        await window.aiApi.updateConversationTitle(convId, editingTitle.value.trim())
+      }
       const conv = conversations.value.find((c) => c.id === convId)
       if (conv) {
         conv.title = editingTitle.value.trim()
@@ -94,7 +111,12 @@ async function saveTitle(convId: string) {
 async function handleDelete(convId: string) {
   if (props.disabled) return
   try {
-    await window.aiApi.deleteConversation(convId)
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      await fetch(`${baseUrl}/api/v1/ai/conversations/${convId}`, { method: 'DELETE' })
+    } else {
+      await window.aiApi.deleteConversation(convId)
+    }
     conversations.value = conversations.value.filter((c) => c.id !== convId)
     emit('delete', convId)
   } catch (error) {

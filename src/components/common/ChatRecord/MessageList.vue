@@ -10,6 +10,7 @@ import dayjs from 'dayjs'
 import MessageItem from './MessageItem.vue'
 import type { ChatRecordMessage, ChatRecordQuery } from './types'
 import { useSessionStore } from '@/stores/session'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 // 时间分隔阈值（秒）：消息间隔超过此值则显示时间分隔线
 const TIME_SEPARATOR_THRESHOLD = 5 * 60 // 5 分钟
@@ -110,6 +111,62 @@ function buildFilterParams(query: ChatRecordQuery) {
   }
 }
 
+// Browser-mode message API helper
+function buildMsgQueryParams(filter?: { startTs?: number; endTs?: number }, senderId?: number, keywords?: string[]) {
+  const p = new URLSearchParams()
+  if (filter?.startTs) p.set('startTime', String(filter.startTs))
+  if (filter?.endTs) p.set('endTime', String(filter.endTs))
+  if (senderId != null) p.set('senderId', String(senderId))
+  if (keywords?.length) p.set('keywords', keywords.join(','))
+  return p
+}
+
+async function browserGetMessagesBefore(sessionId: string, beforeId: number, limit: number, filter?: any, senderId?: number, keywords?: string[]) {
+  const baseUrl = getApiServerUrl()
+  const p = buildMsgQueryParams(filter, senderId, keywords)
+  p.set('limit', String(limit))
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/before/${beforeId}?${p}`)
+  const json = await res.json()
+  return json.data
+}
+
+async function browserGetMessagesAfter(sessionId: string, afterId: number, limit: number, filter?: any, senderId?: number, keywords?: string[]) {
+  const baseUrl = getApiServerUrl()
+  const p = buildMsgQueryParams(filter, senderId, keywords)
+  p.set('limit', String(limit))
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/after/${afterId}?${p}`)
+  const json = await res.json()
+  return json.data
+}
+
+async function browserGetMessageContext(sessionId: string, messageId: number, contextSize?: number) {
+  const baseUrl = getApiServerUrl()
+  const p = new URLSearchParams()
+  if (contextSize != null) p.set('contextSize', String(contextSize))
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/context/${messageId}?${p}`)
+  const json = await res.json()
+  return json.data
+}
+
+async function browserSearchMessages(sessionId: string, keywords: string[], filter?: any, limit = 100, offset = 0, senderId?: number) {
+  const baseUrl = getApiServerUrl()
+  const p = buildMsgQueryParams(filter, senderId, keywords)
+  p.set('limit', String(limit))
+  if (offset) p.set('page', String(Math.floor(offset / limit) + 1))
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages?${p}`)
+  const json = await res.json()
+  return { messages: json.data?.messages || [], total: json.data?.total || 0 }
+}
+
+async function browserGetAllRecentMessages(sessionId: string, filter?: any, limit = 100) {
+  const baseUrl = getApiServerUrl()
+  const p = buildMsgQueryParams(filter)
+  p.set('limit', String(limit))
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/recent?${p}`)
+  const json = await res.json()
+  return { messages: json.data?.messages || [], total: json.data?.total || 0 }
+}
+
 // 映射消息类型（补充缺失字段）
 function mapMessages(messages: any[]): ChatRecordMessage[] {
   return messages.map((m) => ({
@@ -168,12 +225,18 @@ async function loadInitialMessages() {
     if (targetId) {
       // 以目标消息为中心，加载前后各 50 条
       const [beforeResult, afterResult] = await Promise.all([
-        window.aiApi.getMessagesBefore(sessionId, targetId, 50, filter, senderId, keywords),
-        window.aiApi.getMessagesAfter(sessionId, targetId, 50, filter, senderId, keywords),
+        isBrowserEnvironment()
+          ? browserGetMessagesBefore(sessionId, targetId, 50, filter, senderId, keywords)
+          : window.aiApi.getMessagesBefore(sessionId, targetId, 50, filter, senderId, keywords),
+        isBrowserEnvironment()
+          ? browserGetMessagesAfter(sessionId, targetId, 50, filter, senderId, keywords)
+          : window.aiApi.getMessagesAfter(sessionId, targetId, 50, filter, senderId, keywords),
       ])
 
       // 获取目标消息本身
-      const targetMessages = await window.aiApi.getMessageContext(sessionId, targetId, 0)
+      const targetMessages = isBrowserEnvironment()
+        ? await browserGetMessageContext(sessionId, targetId, 0)
+        : await window.aiApi.getMessageContext(sessionId, targetId, 0)
 
       // 合并消息列表
       messages.value = mapMessages([...beforeResult.messages, ...targetMessages, ...afterResult.messages])
@@ -187,7 +250,9 @@ async function loadInitialMessages() {
       // 有关键词，使用搜索功能
       isSearchMode.value = true
       searchOffset.value = 0
-      const result = await window.aiApi.searchMessages(sessionId, keywords, filter, 100, 0, senderId)
+      const result = isBrowserEnvironment()
+        ? await browserSearchMessages(sessionId, keywords, filter, 100, 0, senderId)
+        : await window.aiApi.searchMessages(sessionId, keywords, filter, 100, 0, senderId)
       messages.value = mapMessages(result.messages)
       hasMoreBefore.value = false // 搜索结果从最新开始，没有更早的
       hasMoreAfter.value = result.messages.length >= 100
@@ -200,7 +265,9 @@ async function loadInitialMessages() {
       // 没有目标消息和关键词，加载最新的 100 条
       isSearchMode.value = false
       searchOffset.value = 0
-      const result = await window.aiApi.getAllRecentMessages(sessionId, filter, 100)
+      const result = isBrowserEnvironment()
+        ? await browserGetAllRecentMessages(sessionId, filter, 100)
+        : await window.aiApi.getAllRecentMessages(sessionId, filter, 100)
       messages.value = mapMessages(result.messages)
       hasMoreBefore.value = result.messages.length >= 100
       hasMoreAfter.value = false
@@ -275,7 +342,9 @@ async function loadMoreBefore() {
   try {
     const query = toRaw(props.query)
     const { filter, senderId, keywords } = buildFilterParams(query)
-    const result = await window.aiApi.getMessagesBefore(sessionId, firstMessage.id, 50, filter, senderId, keywords)
+    const result = isBrowserEnvironment()
+      ? await browserGetMessagesBefore(sessionId, firstMessage.id, 50, filter, senderId, keywords)
+      : await window.aiApi.getMessagesBefore(sessionId, firstMessage.id, 50, filter, senderId, keywords)
 
     if (result.messages.length > 0) {
       // 记录当前的第一个可见项索引
@@ -322,7 +391,9 @@ async function loadMoreAfter() {
 
     if (isSearchMode.value && keywords && keywords.length > 0) {
       // 搜索模式：使用分页加载
-      const result = await window.aiApi.searchMessages(sessionId, keywords, filter, 50, searchOffset.value, senderId)
+      const result = isBrowserEnvironment()
+        ? await browserSearchMessages(sessionId, keywords, filter, 50, searchOffset.value, senderId)
+        : await window.aiApi.searchMessages(sessionId, keywords, filter, 50, searchOffset.value, senderId)
 
       if (result.messages.length > 0) {
         messages.value = [...messages.value, ...mapMessages(result.messages)]
@@ -340,7 +411,9 @@ async function loadMoreAfter() {
       const lastMessage = messages.value[messages.value.length - 1]
       if (!lastMessage) return
 
-      const result = await window.aiApi.getMessagesAfter(sessionId, lastMessage.id, 50, filter, senderId, keywords)
+      const result = isBrowserEnvironment()
+        ? await browserGetMessagesAfter(sessionId, lastMessage.id, 50, filter, senderId, keywords)
+        : await window.aiApi.getMessagesAfter(sessionId, lastMessage.id, 50, filter, senderId, keywords)
 
       if (result.messages.length > 0) {
         messages.value = [...messages.value, ...mapMessages(result.messages)]

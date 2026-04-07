@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { CatchphraseAnalysis } from '@/types/analysis'
 import { ListPro } from '@/components/charts'
 import { SectionCard, EmptyState, LoadingState } from '@/components/UI'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -25,7 +26,16 @@ async function loadCatchphraseAnalysis() {
   if (!props.sessionId) return
   isLoading.value = true
   try {
-    catchphraseAnalysis.value = await window.chatApi.getCatchphraseAnalysis(props.sessionId, props.timeFilter)
+    if (isBrowserEnvironment()) {
+      const qs = new URLSearchParams()
+      if (props.timeFilter?.startTs) qs.set('startTime', String(props.timeFilter.startTs))
+      if (props.timeFilter?.endTs) qs.set('endTime', String(props.timeFilter.endTs))
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/stats/catchphrase${qs.toString() ? '?' + qs : ''}`)
+      const json = await res.json()
+      catchphraseAnalysis.value = json.data
+    } else {
+      catchphraseAnalysis.value = await window.chatApi.getCatchphraseAnalysis(props.sessionId, props.timeFilter)
+    }
   } catch (error) {
     console.error('Failed to load catchphrase analysis:', error)
   } finally {

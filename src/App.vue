@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -12,7 +12,7 @@ import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useLLMStore } from '@/stores/llm'
-import { initializeWebUI } from '@/composables/useEnvironment'
+import { initializeWebUI, isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -27,13 +27,27 @@ const tooltip = {
   delayDuration: 100,
 }
 
+// 浏览器环境 = Web UI 模式，不需要等待 Electron IPC 初始化
+const isWebUI = isBrowserEnvironment()
+
 // 应用启动时初始化
 onMounted(async () => {
+  console.log('[App] onMounted - isWebUI:', isWebUI, 'isElectron:', !isWebUI)
+
   // 初始化 Web UI 环境
   try {
     initializeWebUI()
   } catch (err) {
     console.error('[App] Web UI initialization error:', err)
+  }
+
+  // 浏览器环境（Web UI 模式）：跳过 Electron IPC 初始化，但加载会话列表
+  if (isWebUI) {
+    console.log('[App] WebUI mode detected, loading sessions via HTTP API...')
+    // Web UI 模式下通过 HTTP API 加载会话列表
+    await sessionStore.loadSessions()
+    console.log('[App] WebUI sessions loaded, isInitialized:', sessionStore.isInitialized)
+    return
   }
 
   // 平台检测 - 设置 CSS 类名以驱动平台差异化样式（如标题栏安全区域高度）
@@ -55,11 +69,22 @@ onMounted(async () => {
 
 <template>
   <UApp :tooltip="tooltip">
-    <!-- 自定义标题栏 - 拖拽区域 + 窗口控制按钮 -->
-    <TitleBar />
+    <!-- 自定义标题栏 - 仅在 Electron 桌面模式下显示 -->
+    <TitleBar v-if="!isWebUI" />
     <div class="relative flex h-screen w-full overflow-hidden bg-gray-50 dark:bg-gray-900">
-      <!-- 主内容区域 -->
-      <template v-if="!isInitialized">
+      <!-- 浏览器 Web UI 模式：显示 Sidebar + 路由 -->
+      <template v-if="isWebUI">
+        <Sidebar />
+        <main class="relative flex-1 overflow-hidden">
+          <router-view v-slot="{ Component }">
+            <Transition name="page-fade" mode="out-in">
+              <component :is="Component" :key="route.path" />
+            </Transition>
+          </router-view>
+        </main>
+      </template>
+      <!-- Electron 桌面模式：等待初始化 -->
+      <template v-else-if="!isInitialized">
         <div class="flex h-full w-full items-center justify-center">
           <div class="flex flex-col items-center justify-center text-center">
             <UIcon name="i-heroicons-arrow-path" class="h-8 w-8 animate-spin text-pink-500" />

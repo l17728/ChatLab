@@ -72,32 +72,34 @@ function logOperation(
 }
 
 /**
- * Verify request authentication
+ * Verify request authentication using JWT middleware
  */
 async function verifyRequest(request: FastifyRequest, reply: FastifyReply): Promise<{ valid: boolean; userId?: string; username?: string }> {
-  const authHeader = request.headers.authorization
-  if (!authHeader) {
-    console.warn('[WebUI API] Missing authorization header')
+  try {
+    const authHeader = request.headers.authorization
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('[WebUI Auth] Missing or invalid Authorization header')
+      return { valid: false }
+    }
+
+    const token = authHeader.slice(7)
+    const result = verifyToken(token)
+
+    if (!result.success) {
+      console.log('[WebUI Auth] Token verification failed:', result.error)
+      return { valid: false }
+    }
+
+    console.log('[WebUI Auth] Token verified successfully for user:', result.username)
+    return {
+      valid: true,
+      userId: result.userId,
+      username: result.username,
+    }
+  } catch (error) {
+    console.error('[WebUI Auth] Request verification error:', error)
     return { valid: false }
-  }
-
-  if (!authHeader.startsWith('Bearer ')) {
-    console.warn('[WebUI API] Invalid authorization header format')
-    return { valid: false }
-  }
-
-  const token = authHeader.slice(7)
-  const verification = verifyToken(token)
-
-  if (!verification.valid) {
-    console.warn('[WebUI API] Token verification failed')
-    return { valid: false }
-  }
-
-  return {
-    valid: true,
-    userId: verification.userId,
-    username: verification.username,
   }
 }
 
@@ -268,21 +270,31 @@ async function listSessionsHandler(
   reply: FastifyReply
 ): Promise<any> {
   try {
+    // Verify authentication
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
+      console.log('[WebUI Auth] Unauthorized access to list sessions')
       const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
-    logOperation('LIST_SESSIONS', 'Retrieving all sessions')
-
-    const sessions = await worker.getAllSessions()
-
-    logOperation('LIST_SESSIONS_SUCCESS', `Found ${sessions.length} sessions`, {
-      sessionIds: sessions.map(s => s.id),
+    logOperation('LIST_SESSIONS', 'Retrieving all sessions', {
+      userId: verification.userId,
+      ip: request.ip,
+      userAgent: request.headers['user-agent']?.slice(0, 80),
     })
-
-    return successResponse(sessions)
+    const sessions = await worker.getAllSessions()
+    logOperation('LIST_SESSIONS_SUCCESS', `Found ${sessions.length} sessions`, {
+      userId: verification.userId,
+      sessionIds: sessions.map(s => s.id),
+      sessionNames: sessions.map(s => (s as any).name),
+    })
+    const response = successResponse(sessions)
+    logOperation('LIST_SESSIONS_RESPONSE', `Sending response`, {
+      userId: verification.userId,
+      responseShape: { success: response.success, dataLength: Array.isArray(response.data) ? response.data.length : typeof response.data },
+    })
+    return response
   } catch (error) {
     console.error('[WebUI API] Error listing sessions:', error)
     const err = serverError(`Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`)

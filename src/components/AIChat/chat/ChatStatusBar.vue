@@ -8,6 +8,7 @@ import { usePromptStore } from '@/stores/prompt'
 import { useLLMStore } from '@/stores/llm'
 import { exportConversation, type ExportFormat } from '@/utils/conversationExport'
 import type { AgentRuntimeStatus } from '@electron/shared/types'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -117,10 +118,23 @@ async function handleExportConversation() {
 
   isExporting.value = true
   try {
-    const [conv, messages] = await Promise.all([
-      window.aiApi.getConversation(props.currentConversationId),
-      window.aiApi.getMessages(props.currentConversationId),
-    ])
+    let conv: any, messages: any[]
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const [convRes, msgsRes] = await Promise.all([
+        fetch(`${baseUrl}/api/v1/ai/conversations/${props.currentConversationId}`),
+        fetch(`${baseUrl}/api/v1/ai/conversations/${props.currentConversationId}/messages`),
+      ])
+      const convJson = await convRes.json()
+      const msgsJson = await msgsRes.json()
+      conv = convJson.data
+      messages = msgsJson.data || []
+    } else {
+      ;[conv, messages] = await Promise.all([
+        window.aiApi.getConversation(props.currentConversationId),
+        window.aiApi.getMessages(props.currentConversationId),
+      ])
+    }
 
     if (!conv || messages.length === 0) {
       toast.add({
@@ -159,7 +173,9 @@ async function handleExportConversation() {
           {
             label: t('common.openFolder'),
             onClick: () => {
-              window.cacheApi.showInFolder(exportedFilePath)
+              if (!isBrowserEnvironment()) {
+                window.cacheApi.showInFolder(exportedFilePath)
+              }
             },
           },
         ],
@@ -190,6 +206,7 @@ async function handleExportConversation() {
 // 打开当前 AI 日志文件并定位到文件
 async function openAiLogFile() {
   if (isOpeningLog.value) return
+  if (isBrowserEnvironment()) return // desktop-only feature
   isOpeningLog.value = true
   try {
     const result = await window.aiApi.showAiLogFile()

@@ -29,7 +29,7 @@ export interface StaticFileConfig {
 
 const DEFAULT_CONFIG: StaticFileConfig = {
   enabled: true,
-  root: join(__dirname, '../../out/web-ui'),
+  root: join(__dirname, '../../out/renderer'),
   prefix: '/',
   spaFallback: true,
   corsEnabled: true,
@@ -43,9 +43,10 @@ const DEFAULT_CONFIG: StaticFileConfig = {
  */
 function setSecurityHeaders(reply: FastifyReply) {
   // Content Security Policy - allows Vue components and inline styles
+  // 'unsafe-eval' is required for pluginCompute which uses new Function() to run pure compute functions
   reply.header(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.iconify.design https://api.simplesvg.com https://api.unisvg.com; frame-ancestors 'none';"
   )
 
   // Prevent clickjacking

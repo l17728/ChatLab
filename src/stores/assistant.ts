@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { i18n } from '@/i18n'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const CLOUD_MARKET_BASE_URL = 'https://chatlab.fun'
 const LOCALE_PATH_MAP: Record<string, string> = { 'zh-CN': 'cn', 'zh-TW': 'cn', 'en-US': 'en', 'ja-JP': 'ja' }
@@ -106,7 +107,13 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   async function loadAssistants(): Promise<void> {
     try {
-      assistants.value = await window.assistantApi.getAll()
+      if (isBrowserEnvironment()) {
+        const res = await fetch('/api/v1/assistants')
+        const json = await res.json()
+        assistants.value = json.data || []
+      } else {
+        assistants.value = await window.assistantApi.getAll()
+      }
       isLoaded.value = true
     } catch (error) {
       console.error('[AssistantStore] Failed to load assistants:', error)

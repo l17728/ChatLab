@@ -39,12 +39,10 @@ export class HttpClient implements IApiClient {
   /**
    * Make HTTP request with authentication
    */
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: Record<string, any>
-  ): Promise<T | null> {
-    const url = `${this.baseURL}/api${path}`
+  private async request<T>(method: string, path: string, body?: Record<string, any>): Promise<T | null> {
+    const url = `${this.baseURL}/api/webui${path}`
+    console.log(`[HttpClient] ${method} ${url}`, body ? { hasBody: true } : '')
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
@@ -61,7 +59,11 @@ export class HttpClient implements IApiClient {
         body: body ? JSON.stringify(body) : undefined,
       })
 
+      console.log(`[HttpClient] Response: ${response.status} ${response.statusText}`)
+
       if (!response.ok) {
+        const errorBody = await response.text().catch(() => '')
+        console.error(`[HttpClient] Error response:`, errorBody)
         if (response.status === 401) {
           // Token expired or invalid
           this.clearToken()
@@ -70,6 +72,7 @@ export class HttpClient implements IApiClient {
       }
 
       const data = await response.json()
+      console.log(`[HttpClient] Response data:`, JSON.stringify(data).slice(0, 500))
       return data
     } catch (error) {
       console.error(`[HttpClient] Request failed:`, error)
@@ -233,10 +236,7 @@ export class HttpClient implements IApiClient {
    */
   async listConversations(sessionId: string): Promise<ListConversationsResponse> {
     try {
-      const response = await this.request<ListConversationsResponse>(
-        'GET',
-        `/sessions/${sessionId}/conversations`
-      )
+      const response = await this.request<ListConversationsResponse>('GET', `/sessions/${sessionId}/conversations`)
 
       return response || { success: false, error: 'Unknown error' }
     } catch (error) {

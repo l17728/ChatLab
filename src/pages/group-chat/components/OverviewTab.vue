@@ -8,6 +8,7 @@ import { EChartPie } from '@/components/charts'
 import type { EChartPieData } from '@/components/charts'
 import { SectionCard } from '@/components/UI'
 import { useOverviewStatistics } from '@/composables/analysis/useOverviewStatistics'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 import { useDailyTrend } from '@/composables/analysis/useDailyTrend'
 import OverviewStatCards from '@/components/analysis/Overview/OverviewStatCards.vue'
 import OverviewIdentityCard from '@/components/analysis/Overview/OverviewIdentityCard.vue'
@@ -92,7 +93,16 @@ const memberChartData = computed<EChartPieData>(() => {
 async function loadWeekdayActivity() {
   if (!props.session.id) return
   try {
-    weekdayActivity.value = await window.chatApi.getWeekdayActivity(props.session.id, props.timeFilter)
+    if (isBrowserEnvironment()) {
+      const qs = new URLSearchParams()
+      if (props.timeFilter?.startTs) qs.set('startTime', String(props.timeFilter.startTs))
+      if (props.timeFilter?.endTs) qs.set('endTime', String(props.timeFilter.endTs))
+      const res = await fetch(`/api/v1/sessions/${props.session.id}/stats/weekday-activity${qs.toString() ? '?' + qs : ''}`)
+      const json = await res.json()
+      weekdayActivity.value = json.data || []
+    } else {
+      weekdayActivity.value = await window.chatApi.getWeekdayActivity(props.session.id, props.timeFilter)
+    }
   } catch (error) {
     console.error('加载星期活跃度失败:', error)
   }

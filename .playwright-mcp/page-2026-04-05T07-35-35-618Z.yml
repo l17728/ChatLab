@@ -1,0 +1,31 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]:
+          - generic [ref=e7]:
+            - generic [ref=e8]: ChatLab
+            - generic [ref=e9]: vWeb
+          - button [ref=e10] [cursor=pointer]:
+            - img [ref=e11]
+        - button "分析新聊天" [ref=e13] [cursor=pointer]:
+          - img [ref=e14]
+          - generic [ref=e16]: 分析新聊天
+      - generic [ref=e17]:
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: 聊天对话
+            - img [ref=e22]
+          - button [ref=e24]:
+            - img [ref=e25]
+        - generic [ref=e29] [cursor=pointer]:
+          - img [ref=e31]
+          - generic [ref=e33]:
+            - paragraph [ref=e35]: 技术交流群
+            - paragraph [ref=e36]: 74 条消息 · 5 days ago
+    - main [ref=e38]:
+      - generic [ref=e41]:
+        - img [ref=e42]
+        - paragraph [ref=e43]: 加载分析数据...
+  - region "Notifications (F8)":
+    - list

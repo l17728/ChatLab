@@ -5,6 +5,7 @@
 import { computed, ref, watch } from 'vue'
 import { PageAnchorsNav, TopNSelect } from '@/components/UI'
 import { usePageAnchors } from '@/composables'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 import type { MemberActivity } from './types'
 import { ActivityRank, CheckInRank, MemeBattleRank, RepeatSection, DivingRank, NightOwlRank } from './sections'
 
@@ -27,12 +28,27 @@ const availableYears = ref<number[]>([])
 async function loadBaseData() {
   if (!props.sessionId) return
 
-  const [members, years] = await Promise.all([
-    window.chatApi.getMemberActivity(props.sessionId, props.timeFilter),
-    window.chatApi.getAvailableYears(props.sessionId),
-  ])
-  memberActivity.value = members
-  availableYears.value = years
+  if (isBrowserEnvironment()) {
+    const filter = props.timeFilter
+    const params = new URLSearchParams()
+    if (filter?.startTs != null) params.set('startTs', String(filter.startTs))
+    if (filter?.endTs != null) params.set('endTs', String(filter.endTs))
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    const [membersRes, yearsRes] = await Promise.all([
+      fetch(`/api/v1/sessions/${props.sessionId}/stats/member-activity${qs}`),
+      fetch(`/api/v1/sessions/${props.sessionId}/stats/available-years`),
+    ])
+    const [membersJson, yearsJson] = await Promise.all([membersRes.json(), yearsRes.json()])
+    memberActivity.value = membersJson.data || []
+    availableYears.value = yearsJson.data || []
+  } else {
+    const [members, years] = await Promise.all([
+      window.chatApi.getMemberActivity(props.sessionId, props.timeFilter),
+      window.chatApi.getAvailableYears(props.sessionId),
+    ])
+    memberActivity.value = members
+    availableYears.value = years
+  }
 }
 
 watch(

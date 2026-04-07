@@ -22,6 +22,7 @@ import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useTimeSelect } from '@/composables'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -112,7 +113,22 @@ async function loadBaseData() {
   if (!currentSessionId.value) return
 
   try {
-    const sessionData = await window.chatApi.getSession(currentSessionId.value)
+    const isWebUI = isBrowserEnvironment()
+    let sessionData: AnalysisSession | null = null
+
+    if (isWebUI) {
+      // Web UI 模式： 使用 HTTP API
+      const apiClient = getApiClient()
+      const response = await apiClient.getSession(currentSessionId.value)
+      if (response.success) {
+        const responseData = response as any
+        sessionData = responseData.data || responseData.session || null
+      }
+    } else {
+      // Electron 模式: 使用 IPC
+      sessionData = await window.chatApi.getSession(currentSessionId.value)
+    }
+
     session.value = sessionData
   } catch (error) {
     console.error('加载基础数据失败:', error)
@@ -126,19 +142,55 @@ async function loadAnalysisData() {
   isLoading.value = true
 
   try {
+    const isWebUI = isBrowserEnvironment()
     const filter = timeFilter.value
 
-    const [members, hourly, daily, types] = await Promise.all([
-      window.chatApi.getMemberActivity(currentSessionId.value, filter),
-      window.chatApi.getHourlyActivity(currentSessionId.value, filter),
-      window.chatApi.getDailyActivity(currentSessionId.value, filter),
-      window.chatApi.getMessageTypeDistribution(currentSessionId.value, filter),
-    ])
+    if (isWebUI) {
+      // Web UI 模式: 使用 HTTP API
+      const params: any = {}
+      if (filter?.startTs) params.startTime = filter.startTs
+      if (filter?.endTs) params.endTime = filter.endTs
+      const queryString =
+        Object.keys(params).length > 0
+          ? '?' +
+            Object.keys(params)
+              .map((k) => `${k}=${params[k]}`)
+              .join('&')
+          : ''
 
-    memberActivity.value = members
-    hourlyActivity.value = hourly
-    dailyActivity.value = daily
-    messageTypes.value = types
+      const [membersRes, hourlyRes, dailyRes, typesRes] = await Promise.all([
+        fetch(`/api/v1/sessions/${currentSessionId.value}/stats/member-activity${queryString}`),
+        fetch(`/api/v1/sessions/${currentSessionId.value}/stats/hourly-activity${queryString}`),
+        fetch(`/api/v1/sessions/${currentSessionId.value}/stats/daily-activity${queryString}`),
+        fetch(`/api/v1/sessions/${currentSessionId.value}/stats/message-type-distribution${queryString}`),
+      ])
+
+      const [members, hourly, daily, types] = await Promise.all([
+        membersRes.json(),
+        hourlyRes.json(),
+        dailyRes.json(),
+        typesRes.json(),
+      ])
+
+      // 提取数据（HTTP API 返回 { success, data } 格式）
+      memberActivity.value = members.data || []
+      hourlyActivity.value = hourly.data || []
+      dailyActivity.value = daily.data || []
+      messageTypes.value = types.data || []
+    } else {
+      // Electron 模式: 使用 IPC
+      const [members, hourly, daily, types] = await Promise.all([
+        window.chatApi.getMemberActivity(currentSessionId.value, filter),
+        window.chatApi.getHourlyActivity(currentSessionId.value, filter),
+        window.chatApi.getDailyActivity(currentSessionId.value, filter),
+        window.chatApi.getMessageTypeDistribution(currentSessionId.value, filter),
+      ])
+
+      memberActivity.value = members
+      hourlyActivity.value = hourly
+      dailyActivity.value = daily
+      messageTypes.value = types
+    }
   } catch (error) {
     console.error('加载分析数据失败:', error)
   } finally {

@@ -1,0 +1,32 @@
+- generic [active] [ref=e102]:
+  - generic [ref=e104]:
+    - generic [ref=e105]:
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - generic [ref=e108]:
+            - generic [ref=e109]: ChatLab
+            - generic [ref=e110]: vWeb
+          - button [ref=e111] [cursor=pointer]:
+            - img [ref=e112]
+        - button "分析新聊天" [ref=e114] [cursor=pointer]:
+          - img [ref=e115]
+          - generic [ref=e117]: 分析新聊天
+      - generic [ref=e118]:
+        - generic [ref=e120]:
+          - generic [ref=e121]:
+            - generic [ref=e122]: 聊天对话
+            - img [ref=e123]
+          - button [ref=e125]:
+            - img [ref=e126]
+        - generic [ref=e1] [cursor=pointer]:
+          - img [ref=e3]
+          - generic [ref=e4]:
+            - paragraph [ref=e6]: 技术交流群
+            - paragraph [ref=e7]: 74 条消息 · 5 days ago
+      - button "设置" [ref=e132] [cursor=pointer]:
+        - img [ref=e133]
+        - generic [ref=e137]: 设置
+    - main [ref=e138]:
+      - paragraph [ref=e211]: 无法加载会话数据
+  - region "Notifications (F8)":
+    - list

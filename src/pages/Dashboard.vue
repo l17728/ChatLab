@@ -26,10 +26,7 @@
       <section class="sessions-section">
         <div class="section-header">
           <h2>Sessions</h2>
-          <button class="btn-primary" @click="handleCreateSession" :disabled="loading">
-            <span v-if="!loading">New Session</span>
-            <span v-else><span class="spinner-mini"></span> Creating...</span>
-          </button>
+          <p class="help-text">Imported chat records from your Electron application</p>
         </div>
 
         <div v-if="loading && sessions.length === 0" class="loading-state">
@@ -51,19 +48,15 @@
             @click="selectSession(session.id)"
             :class="{ active: selectedSessionId === session.id }"
           >
-            <h3>{{ session.title || 'Untitled Session' }}</h3>
+            <h3>{{ session.name || session.title || 'Untitled Session' }}</h3>
             <p class="session-meta">
-              <span>ID: {{ session.id.substring(0, 8) }}...</span>
-              <span>·</span>
-              <span>{{ formatDate(session.createdAt) }}</span>
+              <span v-if="session.platform">{{ session.platform }}</span>
+              <span v-if="session.platform">·</span>
+              <span>{{ session.messageCount || 0 }} messages</span>
+              <span v-if="session.memberCount">·</span>
+              <span v-if="session.memberCount">{{ session.memberCount }} members</span>
             </p>
-            <button
-              class="btn-delete"
-              @click.stop="handleDeleteSession(session.id)"
-              title="Delete session"
-            >
-              ×
-            </button>
+            <button class="btn-delete" @click.stop="handleDeleteSession(session.id)" title="Delete session">×</button>
           </div>
         </div>
       </section>
@@ -74,7 +67,10 @@
           <h2>Conversations</h2>
           <button class="btn-primary" @click="handleCreateConversation" :disabled="loading">
             <span v-if="!loading">New Conversation</span>
-            <span v-else><span class="spinner-mini"></span> Creating...</span>
+            <span v-else>
+              <span class="spinner-mini"></span>
+              Creating...
+            </span>
           </button>
         </div>
 
@@ -144,17 +140,8 @@
         <div class="chat-input-area">
           <form @submit.prevent="handleSendMessage">
             <div class="input-wrapper">
-              <input
-                v-model="messageText"
-                type="text"
-                placeholder="Type a message..."
-                :disabled="loading"
-              />
-              <button
-                type="submit"
-                class="btn-send"
-                :disabled="!messageText.trim() || loading"
-              >
+              <input v-model="messageText" type="text" placeholder="Type a message..." :disabled="loading" />
+              <button type="submit" class="btn-send" :disabled="!messageText.trim() || loading">
                 <span v-if="!loading">Send</span>
                 <span v-else><span class="spinner-mini"></span></span>
               </button>
@@ -166,9 +153,7 @@
 
     <!-- Admin settings button (Electron only) -->
     <div v-if="layout.showServerSettings.value" class="admin-section">
-      <button class="btn-admin" @click="goToSettings">
-        Admin Settings
-      </button>
+      <button class="btn-admin" @click="goToSettings">Admin Settings</button>
     </div>
   </div>
 </template>
@@ -200,8 +185,14 @@ const fetchSessions = async () => {
   error.value = null
 
   const result = await api.listSessions()
+  console.log('[Dashboard] listSessions result:', JSON.stringify(result).slice(0, 300))
+
   if (result.success && result.data) {
-    sessions.value = result.data
+    // result.data is the raw HTTP response: { success, data: sessions[], meta }
+    // for ElectronClient it is: { success, sessions: [] }
+    const inner = result.data as any
+    const sessionsArray = inner.data ?? inner.sessions ?? []
+    sessions.value = Array.isArray(sessionsArray) ? sessionsArray : []
     console.log('[Dashboard] Loaded', sessions.value.length, 'sessions')
   } else {
     error.value = result.error || 'Failed to load sessions'
@@ -220,8 +211,12 @@ const fetchConversations = async () => {
   error.value = null
 
   const result = await api.listConversations(selectedSessionId.value)
+  console.log('[Dashboard] listConversations result:', JSON.stringify(result).slice(0, 300))
   if (result.success && result.data) {
-    conversations.value = result.data
+    // result.data is the raw HTTP response: { success, data: conversations[], meta }
+    const inner = result.data as any
+    const conversationsArray = inner.data ?? inner.conversations ?? []
+    conversations.value = Array.isArray(conversationsArray) ? conversationsArray : []
     console.log('[Dashboard] Loaded', conversations.value.length, 'conversations')
   } else {
     error.value = result.error || 'Failed to load conversations'
@@ -240,8 +235,16 @@ const fetchMessages = async () => {
   error.value = null
 
   const result = await api.getMessages(selectedConversationId.value)
+  console.log('[Dashboard] getMessages result:', JSON.stringify(result).slice(0, 300))
   if (result.success && result.data) {
-    messages.value = Array.isArray(result.data) ? result.data : result.data.messages || []
+    // result.data is the raw HTTP response: { success, data: { messages, total }, meta }
+    const inner = result.data as any
+    const responseData = inner.data || {}
+    messages.value = Array.isArray(responseData.messages)
+      ? responseData.messages
+      : Array.isArray(responseData)
+        ? responseData
+        : []
     console.log('[Dashboard] Loaded', messages.value.length, 'messages')
   } else {
     error.value = result.error || 'Failed to load messages'
@@ -253,21 +256,8 @@ const fetchMessages = async () => {
 
 // Action handlers
 const handleCreateSession = async () => {
-  console.log('[Dashboard] Creating new session')
-  loading.value = true
-  error.value = null
-
-  // In a real app, prompt for session title
-  const result = await api.createConversation('new-session', 'New Session')
-  if (result.success) {
-    console.log('[Dashboard] Session created successfully')
-    await fetchSessions()
-  } else {
-    error.value = result.error || 'Failed to create session'
-    console.error('[Dashboard] Error creating session:', error.value)
-  }
-
-  loading.value = false
+  error.value = 'Cannot create new sessions from Web UI. Please import chat records using the Electron application.'
+  console.log('[Dashboard] Session creation blocked - only imported sessions are available')
 }
 
 const handleCreateConversation = async () => {
@@ -429,14 +419,11 @@ const formatTime = (date: string | number | Date) => {
 onMounted(async () => {
   console.log('[Dashboard] Component mounted')
 
-  // Check authentication
-  if (!auth.isAuthenticated.value) {
-    console.log('[Dashboard] Not authenticated, redirecting to login')
-    await router.push('/login')
-    return
-  }
+  // Check authentication state (restore token from localStorage if available)
+  await auth.checkAuth()
+  console.log('[Dashboard] Auth state:', { isAuthenticated: auth.isAuthenticated.value })
 
-  // Load data
+  // Load data — sessions endpoint works regardless of auth state
   await fetchSessions()
 })
 </script>
@@ -509,10 +496,8 @@ onMounted(async () => {
 .dashboard-content {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem;
-  display: grid;
-  grid-template-columns: 1fr 1.5fr 2fr;
-  gap: 2rem;
+  display: flex;
+  gap: 0;
 }
 
 .error-banner {
@@ -525,11 +510,34 @@ onMounted(async () => {
   margin-bottom: 1rem;
 }
 
+.sessions-section {
+  width: 300px;
+  min-width: 300px;
+  border-right: 1px solid #e0e0e0;
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: white;
+  flex-shrink: 0;
+}
+
+.conversations-section,
+.chat-section {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+  padding: 1.5rem;
+}
+
+.conversations-section {
+  border-right: 1px solid #e0e0e0;
+  width: 350px;
+  flex-shrink: 0;
+}
+
 section {
   background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 1.5rem;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -544,10 +552,10 @@ section {
   border-bottom: 1px solid #f0f0f0;
 }
 
-.section-header h2 {
-  margin: 0;
-  font-size: 1.2rem;
-  color: #333;
+.help-text {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.85rem;
+  color: #999;
 }
 
 .btn-primary {
@@ -821,17 +829,33 @@ section {
 /* Responsive design */
 @media (max-width: 1400px) {
   .dashboard-content {
-    grid-template-columns: 1fr 1fr;
+    flex-direction: column;
+  }
+
+  .sessions-section,
+  .conversations-section {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #e0e0e0;
+    max-height: 300px;
   }
 
   .chat-section {
-    grid-column: 1 / -1;
+    flex: 1;
   }
 }
 
 @media (max-width: 768px) {
   .dashboard-content {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .sessions-section,
+  .conversations-section {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #e0e0e0;
+    max-height: 250px;
   }
 
   .session-card,

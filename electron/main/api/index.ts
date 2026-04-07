@@ -53,7 +53,7 @@ export async function start(): Promise<void> {
     registerAdminRoutes(server)
 
     // Register static file serving for Web UI
-    const buildOutDir = join(__dirname, '../../out/web-ui')
+    const buildOutDir = join(__dirname, '../../out/renderer')
     await registerStaticFiles(server, {
       enabled: true,
       root: buildOutDir,

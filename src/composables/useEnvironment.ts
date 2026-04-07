@@ -64,7 +64,7 @@ export function getEnvironmentInfo(): {
     isBrowser: !isElectron,
     apiUrl: getApiServerUrl(),
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-    isDev: process.env.NODE_ENV === 'development',
+    isDev: typeof process !== 'undefined' && process.env?.NODE_ENV === 'development',
   }
 }
 

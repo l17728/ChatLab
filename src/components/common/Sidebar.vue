@@ -12,6 +12,7 @@ import SidebarButton from './sidebar/SidebarButton.vue'
 import SidebarFooter from './sidebar/SidebarFooter.vue'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 dayjs.extend(relativeTime)
 const { t } = useI18n()
@@ -26,6 +27,10 @@ const route = useRoute()
 
 // 是否在首页
 const isHomePage = computed(() => route.path === '/')
+const isWebUI = isBrowserEnvironment()
+
+// 在 Web UI 模式下，隐藏导入按钮
+const showImportButton = computed(() => !isWebUI)
 
 // 重命名相关状态
 const showRenameModal = ref(false)
@@ -65,9 +70,16 @@ function toggleSearch() {
 onMounted(async () => {
   sessionStore.loadSessions()
   try {
-    version.value = await window.api.app.getVersion()
+    // 检查是否在 Electron 环境
+    if (window.api?.app?.getVersion) {
+      version.value = await window.api.app.getVersion()
+    } else {
+      // Web UI 模式：使用 package.json 中的版本号或默认值
+      version.value = 'Web'
+    }
   } catch (e) {
     console.error('Failed to get version', e)
+    version.value = 'Web'
   }
 })
 
@@ -224,7 +236,12 @@ function getSessionAvatar(session: AnalysisSession): string | null {
       </div>
 
       <!-- 新建分析 -->
-      <SidebarButton icon="i-heroicons-plus" :title="t('layout.newAnalysis')" @click="handleImport" />
+      <SidebarButton
+        v-if="showImportButton"
+        icon="i-heroicons-plus"
+        :title="t('layout.newAnalysis')"
+        @click="handleImport"
+      />
     </div>
 
     <!-- Session List -->

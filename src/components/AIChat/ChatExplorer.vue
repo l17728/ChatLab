@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@nuxt/ui/runtime/composables/useToast.js'
 import ConversationList from './chat/ConversationList.vue'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 import DataSourcePanel from './chat/DataSourcePanel.vue'
 import ChatMessage from './chat/ChatMessage.vue'
 import AIChatInput from './input/AIChatInput.vue'
@@ -134,7 +135,12 @@ const qaPairs = computed(() => {
 async function checkLLMConfig() {
   isCheckingConfig.value = true
   try {
-    hasLLMConfig.value = await window.llmApi.hasConfig()
+    if (isBrowserEnvironment()) {
+      // In browser mode, assume LLM config exists (config is managed on server side)
+      hasLLMConfig.value = true
+    } else {
+      hasLLMConfig.value = await window.llmApi.hasConfig()
+    }
   } catch (error) {
     console.error('检查 LLM 配置失败：', error)
     hasLLMConfig.value = false

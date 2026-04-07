@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import { formatDateRange } from '@/utils'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 import UITabs from '@/components/UI/Tabs.vue'
 import DatePicker from '@/components/UI/DatePicker.vue'
 
@@ -378,10 +379,25 @@ async function loadData() {
   }
 
   try {
-    const [years, range] = await Promise.all([
-      window.chatApi.getAvailableYears(props.sessionId),
-      window.chatApi.getTimeRange(props.sessionId),
-    ])
+    let years: number[]
+    let range: { start: number; end: number } | null
+
+    if (isBrowserEnvironment()) {
+      // Web UI 模式：通过 HTTP API 获取
+      const [yearsRes, rangeRes] = await Promise.all([
+        fetch(`/api/v1/sessions/${props.sessionId}/stats/available-years`),
+        fetch(`/api/v1/sessions/${props.sessionId}/stats/time-range`),
+      ])
+      const [yearsJson, rangeJson] = await Promise.all([yearsRes.json(), rangeRes.json()])
+      years = yearsJson.data || []
+      range = rangeJson.data || null
+    } else {
+      // Electron 模式：通过 IPC 获取
+      ;[years, range] = await Promise.all([
+        window.chatApi.getAvailableYears(props.sessionId),
+        window.chatApi.getTimeRange(props.sessionId),
+      ])
+    }
     availableYears.value = years
     fullTimeRange.value = range
     emit('update:fullRange', range)

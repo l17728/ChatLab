@@ -5,6 +5,7 @@ import type { MentionAnalysis, MemberMentionDetail } from '@/types/analysis'
 import { RankListPro } from '@/components/charts'
 import type { RankItem } from '@/components/charts'
 import { SectionCard, EmptyState, LoadingState } from '@/components/UI'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -28,7 +29,16 @@ async function loadMentionAnalysis() {
   if (!props.sessionId) return
   isLoadingMention.value = true
   try {
-    mentionAnalysis.value = await window.chatApi.getMentionAnalysis(props.sessionId, props.timeFilter)
+    if (isBrowserEnvironment()) {
+      const qs = new URLSearchParams()
+      if (props.timeFilter?.startTs) qs.set('startTime', String(props.timeFilter.startTs))
+      if (props.timeFilter?.endTs) qs.set('endTime', String(props.timeFilter.endTs))
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/stats/mention${qs.toString() ? '?' + qs : ''}`)
+      const json = await res.json()
+      mentionAnalysis.value = json.data
+    } else {
+      mentionAnalysis.value = await window.chatApi.getMentionAnalysis(props.sessionId, props.timeFilter)
+    }
   } catch (error) {
     console.error('加载 @ 互动分析失败:', error)
   } finally {

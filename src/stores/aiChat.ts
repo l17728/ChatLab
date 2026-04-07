@@ -13,6 +13,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useAssistantStore } from '@/stores/assistant'
 import { useSkillStore } from '@/stores/skill'
 import type { TokenUsage, AgentRuntimeStatus } from '@electron/shared/types'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 // 工具调用记录
 export interface ToolCallRecord {
@@ -334,7 +335,14 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
     }
 
     try {
-      const members = await window.chatApi.getMembers(state.sessionId)
+      let members: { platformId: string; groupNickname?: string; accountName?: string }[]
+      if (isBrowserEnvironment()) {
+        const res = await fetch(`/api/v1/sessions/${state.sessionId}/members`)
+        const json = await res.json()
+        members = json.data || []
+      } else {
+        members = await window.chatApi.getMembers(state.sessionId)
+      }
       const ownerMember = members.find((member) => member.platformId === ownerId)
       state.ownerInfo = ownerMember
         ? {

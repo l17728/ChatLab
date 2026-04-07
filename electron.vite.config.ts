@@ -52,8 +52,8 @@ export default defineConfig(() => {
       root: 'src/',
       build: {
         sourcemap: false,
-        // Web UI output to separate directory for static serving
-        outDir: '../out/web-ui',
+        // Use absolute path to avoid electron-vite relative path resolution issues
+        outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/index.html'),

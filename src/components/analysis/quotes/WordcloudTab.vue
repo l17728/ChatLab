@@ -7,6 +7,7 @@ import { LoadingState, EmptyState, UITabs } from '@/components/UI'
 import UserSelect from '@/components/common/UserSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useLayoutStore } from '@/stores/layout'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -109,7 +110,15 @@ const posTagOptions = computed(() =>
 // 加载词性标签定义
 async function loadPosTagDefinitions() {
   try {
-    const tags = await window.nlpApi.getPosTags()
+    let tags: PosTagInfo[]
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const res = await fetch(`${baseUrl}/api/v1/nlp/pos-tags`)
+      const json = await res.json()
+      tags = json.data
+    } else {
+      tags = await window.nlpApi.getPosTags()
+    }
     posTagDefinitions.value = tags
     // 初始化自定义词性为有意义的词性
     customPosTags.value = tags.filter((t) => t.meaningful).map((t) => t.tag)
@@ -124,17 +133,37 @@ async function loadWordFrequency() {
 
   isLoading.value = true
   try {
-    const result = await window.nlpApi.getWordFrequency({
-      sessionId: props.sessionId,
-      locale: locale.value,
-      timeFilter: props.timeFilter ? { startTs: props.timeFilter.startTs, endTs: props.timeFilter.endTs } : undefined,
-      memberId: selectedMemberId.value ?? undefined,
-      topN: maxWords.value,
-      minCount: 2,
-      posFilterMode: posFilterMode.value,
-      customPosTags: posFilterMode.value === 'custom' ? [...customPosTags.value] : undefined,
-      enableStopwords: enableStopwords.value,
-    })
+    let result: any
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const params = new URLSearchParams()
+      params.set('locale', locale.value)
+      params.set('topN', String(maxWords.value))
+      params.set('minCount', '2')
+      params.set('posFilterMode', posFilterMode.value)
+      params.set('enableStopwords', String(enableStopwords.value))
+      if (props.timeFilter?.startTs) params.set('startTime', String(props.timeFilter.startTs))
+      if (props.timeFilter?.endTs) params.set('endTime', String(props.timeFilter.endTs))
+      if (selectedMemberId.value != null) params.set('memberId', String(selectedMemberId.value))
+      if (posFilterMode.value === 'custom' && customPosTags.value.length > 0) {
+        params.set('customPosTags', customPosTags.value.join(','))
+      }
+      const res = await fetch(`${baseUrl}/api/v1/sessions/${props.sessionId}/nlp/word-frequency?${params}`)
+      const json = await res.json()
+      result = json.data
+    } else {
+      result = await window.nlpApi.getWordFrequency({
+        sessionId: props.sessionId,
+        locale: locale.value,
+        timeFilter: props.timeFilter ? { startTs: props.timeFilter.startTs, endTs: props.timeFilter.endTs } : undefined,
+        memberId: selectedMemberId.value ?? undefined,
+        topN: maxWords.value,
+        minCount: 2,
+        posFilterMode: posFilterMode.value,
+        customPosTags: posFilterMode.value === 'custom' ? [...customPosTags.value] : undefined,
+        enableStopwords: enableStopwords.value,
+      })
+    }
 
     wordcloudData.value = {
       words: result.words.map((w) => ({

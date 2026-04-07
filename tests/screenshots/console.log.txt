@@ -1,0 +1,71 @@
+[LOG] ╔════════════════════════════════════════════════════════╗
+[LOG] ║          ChatLab Web UI - Initialization              ║
+[LOG] ╚════════════════════════════════════════════════════════╝
+[LOG] [Web UI] Environment Information:
+[LOG]   • Runtime: Browser (Web)
+[LOG]   • API Server: http://localhost:9871
+[LOG]   • Mode: Production
+[LOG]   • User Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)...
+[LOG] [API Client] Using HTTP client
+[LOG] [Web UI] API Client:
+[LOG]   • Type: HTTP
+[LOG]   • Status: Ready
+[LOG] [Web UI] Initialization complete
+
+[ERROR] Executing inline script violates the following Content Security Policy directive 'script-src 'self' 'wasm-unsafe-eval''. Either the 'unsafe-inline' keyword, a hash ('sha256-tYCcUbFfjZ9QESuTWESGWrFg2SmiEdyD2MYUfRWUgK0='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.
+[WARNING] [HomeFooter] 拉取远程配置失败，将继续使用本地配置。 TypeError: Cannot read properties of undefined (reading 'app')
+    at fetchConfig (http://localhost:9871/assets/index-BNUZgiCY.js:1879:41)
+    at http://localhost:9871/assets/index-BNUZgiCY.js:1909:7
+    at http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:3455:40
+    at callWithErrorHandling (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:1974:19)
+    at callWithAsyncErrorHandling (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:1981:17)
+    at hook.__weh.hook.__weh (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:3440:19)
+    at flushPostFlushCbs (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:2128:28)
+    at flushJobs (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:2164:5)
+    at async watch.immediate (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:11978:5)
+[ERROR] 检查迁移失败: TypeError: Cannot read properties of undefined (reading 'checkMigration')
+    at Proxy.checkMigration (http://localhost:9871/assets/index-dmr-iKr6.js:5373:45)
+    at Proxy.wrappedAction (http://localhost:9871/assets/index-dmr-iKr6.js:212:18)
+    at http://localhost:9871/assets/index-BNUZgiCY.js:217:41
+    at http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:3455:40
+    at callWithErrorHandling (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:1974:19)
+    at callWithAsyncErrorHandling (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:1981:17)
+    at hook.__weh.hook.__weh (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:3440:19)
+    at flushPostFlushCbs (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:2128:28)
+    at flushJobs (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:2164:5)
+    at async watch.immediate (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:11978:5)
+[ERROR] Failed to load resource: the server responded with a status of 404 (Not Found)
+[LOG] [Web UI] Environment detected: {isElectron: false, isBrowser: true, apiUrl: http://localhost:9871}
+[LOG] [Layout] Configuration: {showNativeMenu: false, showWebMenu: true, useDesktopLayout: false}
+[LOG] [Login] Component mounted
+[LOG] [Auth] Authentication check: {isAuth: false, hasToken: false}
+[VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o
+[LOG] [Login] Attempting login for user: admin
+[LOG] [Auth] Logging in as: admin
+[LOG] [Auth] Login successful for: admin
+[LOG] [Login] Login successful
+[LOG] [Router] Route requires auth: webui-dashboard
+[LOG] [Layout] Configuration: {showNativeMenu: false, showWebMenu: true, useDesktopLayout: false}
+[LOG] [Dashboard] Component mounted
+[LOG] [Auth] Authentication check: {isAuth: true, hasToken: true}
+[LOG] [Dashboard] Fetching sessions
+[LOG] [API] Executing listSessions
+[ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+[ERROR] [HttpClient] Request failed: Error: HTTP 401: Unauthorized
+    at HttpClient.request (http://localhost:9871/assets/index-dmr-iKr6.js:11735:15)
+    at async HttpClient.listSessions (http://localhost:9871/assets/index-dmr-iKr6.js:11847:24)
+    at async executeApiCall (http://localhost:9871/assets/index-dmr-iKr6.js:12156:22)
+    at async fetchSessions (http://localhost:9871/assets/Dashboard-_18do0zh.js:107:22)
+    at async http://localhost:9871/assets/Dashboard-_18do0zh.js:297:7
+[LOG] [API] listSessions success
+[LOG] [Dashboard] Loaded undefined sessions
+[ERROR] TypeError: Cannot read properties of undefined (reading 'substring')
+    at http://localhost:9871/assets/Dashboard-_18do0zh.js:348:87
+    at renderList (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:3554:18)
+    at Proxy.<anonymous> (http://localhost:9871/assets/Dashboard-_18do0zh.js:340:68)
+    at renderComponentRoot (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:4458:16)
+    at ReactiveEffect.componentUpdateFn [as fn] (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:5648:26)
+    at ReactiveEffect.run (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:384:19)
+    at ReactiveEffect.runIfDirty (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:417:12)
+    at callWithErrorHandling (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:1974:33)
+    at flushJobs (http://localhost:9871/assets/vendor-reka-ui-f1QM9ZWi.js:2145:9)

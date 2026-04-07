@@ -13,7 +13,7 @@ export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
   timeout: 60_000,       // 单个 test 最长 60s（含 AI 响应等待）
-  globalTimeout: 300_000, // 整套测试最长 5 分钟
+  globalTimeout: 600_000, // 整套测试最长 10 分钟（两个 Electron 套件串行）
   retries: 0,             // CI 中失败不重试，保持日志清晰
   workers: 1,             // E2E 必须串行，避免 Electron 实例冲突
 

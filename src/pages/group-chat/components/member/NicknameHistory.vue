@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { MemberWithStats, MemberNameHistory } from '@/types/analysis'
 import { SectionCard, EmptyState, LoadingState } from '@/components/UI'
 import { formatPeriod } from '@/utils'
+import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -34,7 +35,13 @@ function getDisplayName(member: MemberWithStats): string {
 async function loadMembers() {
   if (!props.sessionId) return
   try {
-    members.value = await window.chatApi.getMembers(props.sessionId)
+    if (isBrowserEnvironment()) {
+      const res = await fetch(`/api/v1/sessions/${props.sessionId}/members`)
+      const json = await res.json()
+      members.value = json.data || []
+    } else {
+      members.value = await window.chatApi.getMembers(props.sessionId)
+    }
   } catch (error) {
     console.error('加载成员列表失败:', error)
   }
@@ -47,11 +54,20 @@ async function loadMembersWithNicknameChanges() {
   const membersWithChanges: MemberWithHistory[] = []
 
   try {
-    const historyPromises = members.value.map((member) =>
-      window.chatApi.getMemberNameHistory(props.sessionId, member.id)
-    )
-
-    const allHistories = await Promise.all(historyPromises)
+    let allHistories: MemberNameHistory[][]
+    if (isBrowserEnvironment()) {
+      allHistories = await Promise.all(
+        members.value.map(async (member) => {
+          const res = await fetch(`/api/v1/sessions/${props.sessionId}/members/${member.id}/name-history`)
+          const json = await res.json()
+          return (json.data || []) as MemberNameHistory[]
+        })
+      )
+    } else {
+      allHistories = await Promise.all(
+        members.value.map((member) => window.chatApi.getMemberNameHistory(props.sessionId, member.id))
+      )
+    }
 
     members.value.forEach((member, index) => {
       const history = allHistories[index]

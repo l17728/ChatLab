@@ -141,6 +141,8 @@ async function launchApp(options = {}) {
 
   const proc = spawn(electronExe, electronArgs, {
     stdio: 'inherit',
+    // Windows 下必须使用 shell: true 才能执行 .cmd 文件（否则会报 EINVAL）
+    shell: process.platform === 'win32',
     env: {
       ...process.env,
       TEST_MODE: 'true',  // E2E 测试模式：允许多个实例

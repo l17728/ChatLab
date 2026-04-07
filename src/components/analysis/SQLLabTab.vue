@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SchemaPanel, AIGenerateModal, AIHistoryModal, ResultTable } from './SQLLab'
 import type { AIHistory, SQLResult, TableSchema } from './SQLLab'
+import { isBrowserEnvironment, getApiServerUrl } from '@/composables/useEnvironment'
 
 const { t } = useI18n()
 
@@ -87,7 +88,19 @@ async function executeSQL() {
   resultTableRef.value?.resetSort()
 
   try {
-    result.value = await window.chatApi.executeSQL(props.sessionId, sql.value)
+    if (isBrowserEnvironment()) {
+      const baseUrl = getApiServerUrl()
+      const res = await fetch(`${baseUrl}/api/v1/sessions/${props.sessionId}/sql/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql: sql.value }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error?.message || 'SQL execution error')
+      result.value = json.data
+    } else {
+      result.value = await window.chatApi.executeSQL(props.sessionId, sql.value)
+    }
   } catch (err: any) {
     error.value = err.message || String(err)
   } finally {
