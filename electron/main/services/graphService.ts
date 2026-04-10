@@ -60,6 +60,11 @@ export class GraphService {
     const existing = this.db.prepare('SELECT id, occurrence_count FROM graph_node WHERE type = ? AND name = ?').get(node.type, node.name) as any
 
     if (existing) {
+      // 合并 sourceSessions（保留历史会话，追加新会话）
+      const existingRow = this.db.prepare('SELECT source_sessions FROM graph_node WHERE id = ?').get(existing.id) as any
+      const existingSessions: string[] = existingRow?.source_sessions ? JSON.parse(existingRow.source_sessions) : []
+      const mergedSessions = Array.from(new Set([...existingSessions, ...node.sourceSessions]))
+
       this.db.prepare(`
         UPDATE graph_node SET
           last_seen_ts = ?,
@@ -67,7 +72,7 @@ export class GraphService {
           confidence = MAX(confidence, ?),
           source_sessions = ?
         WHERE id = ?
-      `).run(node.lastSeenTs, node.confidence, JSON.stringify(node.sourceSessions), existing.id)
+      `).run(node.lastSeenTs, node.confidence, JSON.stringify(mergedSessions), existing.id)
       return existing.id
     }
 
@@ -106,13 +111,19 @@ export class GraphService {
     ).get(edge.sourceNodeId, edge.targetNodeId, edge.type) as any
 
     if (existing) {
+      // 合并 sourceSessions（保留历史会话）
+      const existingRow = this.db.prepare('SELECT source_sessions FROM graph_edge WHERE id = ?').get(existing.id) as any
+      const existingSessions: string[] = existingRow?.source_sessions ? JSON.parse(existingRow.source_sessions) : []
+      const mergedSessions = Array.from(new Set([...existingSessions, ...edge.sourceSessions]))
+
       this.db.prepare(`
         UPDATE graph_edge SET
           last_seen_ts = ?,
           occurrence_count = occurrence_count + 1,
-          confidence = MAX(confidence, ?)
+          confidence = MAX(confidence, ?),
+          source_sessions = ?
         WHERE id = ?
-      `).run(edge.lastSeenTs, edge.confidence, existing.id)
+      `).run(edge.lastSeenTs, edge.confidence, JSON.stringify(mergedSessions), existing.id)
       return existing.id
     }
 
@@ -174,7 +185,7 @@ export class GraphService {
       ${limit}
     `).all(...params) as any[]
 
-    return rows.map(this.mapNodeRow)
+    return rows.map((row) => this.mapNodeRow(row))
   }
 
   /**
@@ -191,7 +202,7 @@ export class GraphService {
       LIMIT 1000
     `).all(...nodeIds, ...nodeIds) as any[]
 
-    return rows.map(this.mapEdgeRow)
+    return rows.map((row) => this.mapEdgeRow(row))
   }
 
   /**

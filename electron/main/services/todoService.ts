@@ -211,18 +211,28 @@ export class TodoService {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
-    const sortCol = options.sortBy === 'due' ? 'due_ts' : options.sortBy === 'updated' ? 'updated_ts' : 'created_ts'
+    const sortByMap: Record<string, string> = {
+      due: 'due_ts',
+      updated: 'updated_ts',
+      priority: "CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END",
+      created: 'created_ts',
+    }
+    const sortCol = sortByMap[options.sortBy || 'created'] || 'created_ts'
     const sortDir = options.sortOrder === 'asc' ? 'ASC' : 'DESC'
-    const limit = options.limit ? `LIMIT ${options.limit}` : ''
-    const offset = options.offset ? `OFFSET ${options.offset}` : ''
 
-    const rows = this.db.prepare(`
-      SELECT * FROM personal_todo ${where}
-      ORDER BY ${sortCol} ${sortDir}
-      ${limit} ${offset}
-    `).all(...params) as any[]
+    let sql = `SELECT * FROM personal_todo ${where} ORDER BY ${sortCol} ${sortDir}`
+    if (options.limit !== undefined && options.limit > 0) {
+      sql += ' LIMIT ?'
+      params.push(Math.trunc(options.limit))
+      if (options.offset !== undefined && options.offset > 0) {
+        sql += ' OFFSET ?'
+        params.push(Math.trunc(options.offset))
+      }
+    }
 
-    return rows.map(this.mapRow)
+    const rows = this.db.prepare(sql).all(...params) as any[]
+
+    return rows.map((row) => this.mapRow(row))
   }
 
   /**

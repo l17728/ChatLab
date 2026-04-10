@@ -355,6 +355,7 @@ export async function startGraphExtraction(
     // 滑动窗口批处理（batchSize=60, overlap=5，图谱需要更多上下文）
     const batchSize = 60
     const overlap = 5
+    if (batchSize <= overlap) throw new Error(`[ExtractionRunner] batchSize(${batchSize}) must be > overlap(${overlap})`)
     const allEntities: ExtractedEntity[] = []
     const allRelationships: ExtractedRelationship[] = []
 
@@ -447,6 +448,7 @@ export async function startTaskExtraction(
 
     const batchSize = 50
     const overlap = 5
+    if (batchSize <= overlap) throw new Error(`[ExtractionRunner] batchSize(${batchSize}) must be > overlap(${overlap})`)
     const allExtracted: ExtractedTask[] = []
 
     for (let i = 0; i < messages.length; i += batchSize - overlap) {
@@ -476,7 +478,11 @@ export async function startTaskExtraction(
           status: 'pending',
           priority: task.priority || 'normal',
           ownerDisplayName: task.ownerName,
-          dueTs: task.dueDate ? new Date(task.dueDate).getTime() : undefined,
+          dueTs: (() => {
+            if (!task.dueDate) return undefined
+            const ts = new Date(task.dueDate).getTime()
+            return isNaN(ts) ? undefined : ts
+          })(),
           confidence: task.confidence,
           isManual: false,
           tags: [],
@@ -640,6 +646,7 @@ export async function startFaqExtraction(sessionId: string, win: BrowserWindow):
 
     const batchSize = 40
     const overlap = 5
+    if (batchSize <= overlap) throw new Error(`[ExtractionRunner] batchSize(${batchSize}) must be > overlap(${overlap})`)
     const allFAQs: ExtractedFAQ[] = []
 
     for (let i = 0; i < messages.length; i += batchSize - overlap) {
@@ -850,6 +857,7 @@ export async function startFocusExtraction(sessionId: string, win: BrowserWindow
 
     const batchSize = 50
     const overlap = 5
+    if (batchSize <= overlap) throw new Error(`[ExtractionRunner] batchSize(${batchSize}) must be > overlap(${overlap})`)
     const allFocusItems: ExtractedFocusItem[] = []
 
     for (let i = 0; i < messages.length; i += batchSize - overlap) {

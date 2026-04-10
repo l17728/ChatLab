@@ -199,24 +199,23 @@ export class TaskService {
       params.push(options.dueAfter)
     }
 
-    // 排序
-    const sortBy = options.sortBy || 'created'
-    const sortOrder = options.sortOrder || 'desc'
-    const sortColumn = {
+    // 排序（使用白名单防止 SQL 注入）
+    const sortByMap: Record<string, string> = {
       created: 'created_ts',
       due: 'due_ts',
       updated: 'updated_ts',
-    }[sortBy]
+    }
+    const sortColumn = sortByMap[options.sortBy || 'created'] || 'created_ts'
+    const sortDir = options.sortOrder === 'asc' ? 'ASC' : 'DESC'
+    query += ` ORDER BY ${sortColumn} ${sortDir}`
 
-    query += ` ORDER BY ${sortColumn} ${sortOrder.toUpperCase()}`
-
-    // 分页
-    if (options.limit) {
+    // 分页（使用参数化防止 SQL 注入）
+    if (options.limit !== undefined && options.limit > 0) {
       query += ' LIMIT ?'
-      params.push(options.limit)
-      if (options.offset) {
+      params.push(Math.trunc(options.limit))
+      if (options.offset !== undefined && options.offset > 0) {
         query += ' OFFSET ?'
-        params.push(options.offset)
+        params.push(Math.trunc(options.offset))
       }
     }
 
@@ -358,12 +357,46 @@ export class TaskService {
   }
 
   /**
-   * 为任务列表批量附加参与者和来源数据
+   * 为任务列表批量附加参与者和来源数据（避免 N+1 查询）
    */
   private attachRelations(tasks: GlobalTask[]): GlobalTask[] {
+    if (tasks.length === 0) return tasks
+
+    const ids = tasks.map((t) => t.id)
+    const placeholders = ids.map(() => '?').join(',')
+
+    // 批量查询参与者
+    const participantRows = this.db
+      .prepare(`SELECT task_id, global_user_id, role, session_id FROM task_participant WHERE task_id IN (${placeholders})`)
+      .all(...ids) as any[]
+    const participantsByTaskId = new Map<number, TaskParticipant[]>()
+    for (const r of participantRows) {
+      if (!participantsByTaskId.has(r.task_id)) participantsByTaskId.set(r.task_id, [])
+      participantsByTaskId.get(r.task_id)!.push({
+        globalUserId: r.global_user_id,
+        role: r.role,
+        sessionId: r.session_id ?? undefined,
+      })
+    }
+
+    // 批量查询来源
+    const sourceRows = this.db
+      .prepare(`SELECT task_id, session_id, message_id, message_ts, confidence FROM task_source WHERE task_id IN (${placeholders})`)
+      .all(...ids) as any[]
+    const sourcesByTaskId = new Map<number, TaskSource[]>()
+    for (const r of sourceRows) {
+      if (!sourcesByTaskId.has(r.task_id)) sourcesByTaskId.set(r.task_id, [])
+      sourcesByTaskId.get(r.task_id)!.push({
+        sessionId: r.session_id,
+        messageId: r.message_id,
+        messageTs: r.message_ts,
+        confidence: r.confidence,
+      })
+    }
+
     for (const task of tasks) {
-      task.participants = this.getParticipants(task.id)
-      task.sources = this.getSources(task.id)
+      task.participants = participantsByTaskId.get(task.id) || []
+      task.sources = sourcesByTaskId.get(task.id) || []
     }
     return tasks
   }

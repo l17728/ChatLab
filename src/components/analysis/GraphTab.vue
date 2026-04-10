@@ -310,7 +310,8 @@ async function expandNeighbors() {
   cyNode.neighborhood('node').flashClass('neighbor-flash', 800)
 
   // Fetch edges from DB for this node, load any unrendered neighbor nodes
-  const numericId = Number(nodeId)
+  // 注意：nodeId 是 Cytoscape 中的格式 "n123"，需要移除前缀提取数字 ID
+  const numericId = Number(nodeId.replace(/^n/, ''))
   if (!isNaN(numericId) && !isBrowserEnvironment()) {
     const edgesResult = await window.collabApi?.getGraphEdges([numericId])
     if (edgesResult?.success && edgesResult.data) {
@@ -367,18 +368,20 @@ function toggleTypeFilter(type: string) {
   graphStore.setTypeFilter(current)
 }
 
+const fullscreenHandler = () => {
+  isFullscreen.value = !!document.fullscreenElement
+}
+
 onMounted(async () => {
   if (isBrowserEnvironment()) return
-  document.addEventListener('fullscreenchange', () => {
-    isFullscreen.value = !!document.fullscreenElement
-  })
+  document.addEventListener('fullscreenchange', fullscreenHandler)
   await Promise.all([graphStore.loadStats(), graphStore.loadGraph()])
   await initCytoscape()
 })
 
 onUnmounted(() => {
   cytoscapeInstance.value?.destroy()
-  document.removeEventListener('fullscreenchange', () => {})
+  document.removeEventListener('fullscreenchange', fullscreenHandler)
 })
 
 watch([filteredNodes, filteredEdges], () => {

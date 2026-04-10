@@ -41,7 +41,13 @@ function getGlobalDbPath(dbName: GlobalDBName): string {
  */
 function initializeGlobalDb(dbName: GlobalDBName): Database.Database {
   const dbPath = getGlobalDbPath(dbName)
-  const db = new Database(dbPath)
+  let db: Database.Database
+  try {
+    db = new Database(dbPath)
+  } catch (err) {
+    console.error(`[GlobalDB] Failed to open database "${dbName}" at ${dbPath}:`, err)
+    throw new Error(`Cannot open global database "${dbName}": ${err}`)
+  }
 
   // 启用 WAL 模式
   db.pragma('journal_mode = WAL')

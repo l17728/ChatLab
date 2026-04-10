@@ -125,37 +125,45 @@ export class FocusService {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = options.limit ? `LIMIT ${options.limit}` : 'LIMIT 100'
-    const offset = options.offset ? `OFFSET ${options.offset}` : ''
 
-    const rows = this.db.prepare(`
-      SELECT * FROM focus_item ${where}
-      ORDER BY last_activity_ts DESC, created_ts DESC
-      ${limit} ${offset}
-    `).all(...params) as any[]
+    let sql = `SELECT * FROM focus_item ${where} ORDER BY last_activity_ts DESC, created_ts DESC`
+    if (options.limit !== undefined && options.limit > 0) {
+      sql += ' LIMIT ?'
+      params.push(Math.trunc(options.limit))
+      if (options.offset !== undefined && options.offset > 0) {
+        sql += ' OFFSET ?'
+        params.push(Math.trunc(options.offset))
+      }
+    } else {
+      sql += ' LIMIT 100'
+    }
 
-    return rows.map(this.mapRow)
+    const rows = this.db.prepare(sql).all(...params) as any[]
+
+    return rows.map((row) => this.mapRow(row))
   }
 
   /**
-   * 增加提及计数
+   * 增加提及计数（原子事务）
    */
-  incrementMentionCount(id: number, _sessionId: string): void {
-    this.db.prepare(`
-      UPDATE focus_item SET
-        mention_count = mention_count + 1,
-        last_activity_ts = ?,
-        updated_ts = ?
-      WHERE id = ?
-    `).run(Date.now(), Date.now(), id)
+  incrementMentionCount(id: number, sessionId: string): void {
+    const now = Date.now()
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE focus_item SET
+          mention_count = mention_count + 1,
+          last_activity_ts = ?,
+          updated_ts = ?
+        WHERE id = ?
+      `).run(now, now, id)
 
-    // 更新 related_session_count（简化：通过 message link 统计）
-    const sessionCount = (this.db.prepare(`
-      SELECT COUNT(DISTINCT session_id) as cnt FROM focus_message_link WHERE focus_id = ?
-    `).get(id) as any)?.cnt || 0
+      // 计算关联会话数（在同一事务内保证一致性）
+      const sessionCount = (this.db.prepare(`
+        SELECT COUNT(DISTINCT session_id) as cnt FROM focus_message_link WHERE focus_id = ?
+      `).get(id) as any)?.cnt || 0
 
-    this.db.prepare('UPDATE focus_item SET related_session_count = ? WHERE id = ?').run(sessionCount, id)
-  }
+      this.db.prepare('UPDATE focus_item SET related_session_count = ? WHERE id = ?').run(sessionCount, id)
+    })()
 
   private mapRow(row: any): FocusItem {
     return {

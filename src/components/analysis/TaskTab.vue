@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useTaskStore } from '@/stores/task'
@@ -31,9 +31,13 @@ const isExtracting = computed(
 const showSourceViewer = ref(false)
 const sourceViewerData = ref<{ sessionId: string; messageId: number } | null>(null)
 
-// 加载任务
+// 加载任务（带序号防止竞态）
+let _loadSeq = 0
 async function loadTasks() {
-  await taskStore.loadBySession(props.sessionId)
+  const seq = ++_loadSeq
+  const result = await taskStore.loadBySession(props.sessionId)
+  if (seq !== _loadSeq) return // 丢弃过期响应
+  return result
 }
 
 // 加载提取状态
@@ -61,34 +65,49 @@ async function retryJob(jobId: string) {
   await loadExtractionStatus()
 }
 
-// 监听提取进度事件
+// 监听提取进度事件（需要在 onUnmounted 清理，防止内存泄漏）
+const _ipcCleanups: (() => void)[] = []
+
 function setupExtractionListeners() {
   if (isBrowserEnvironment() || !window.electron) return
 
-  window.electron.ipcRenderer.on('collab:extractionProgress', (_event: any, data: any) => {
+  const onProgress = (_event: any, data: any) => {
     if (data.sessionId !== props.sessionId) return
     const idx = extractionJobs.value.findIndex((j) => j.id === data.jobId)
     if (idx !== -1) {
       extractionJobs.value[idx].progress = data.progress
       extractionJobs.value[idx].progressMessage = data.message
     }
-  })
-
-  window.electron.ipcRenderer.on('collab:extractionDone', (_event: any, data: any) => {
+  }
+  const onDone = (_event: any, data: any) => {
     if (data.sessionId !== props.sessionId) return
     loadExtractionStatus()
     loadTasks()
-  })
-
-  window.electron.ipcRenderer.on('collab:extractionError', (_event: any, data: any) => {
+  }
+  const onError = (_event: any, data: any) => {
     if (data.sessionId !== props.sessionId) return
     loadExtractionStatus()
-  })
+  }
+
+  window.electron.ipcRenderer.on('collab:extractionProgress', onProgress)
+  window.electron.ipcRenderer.on('collab:extractionDone', onDone)
+  window.electron.ipcRenderer.on('collab:extractionError', onError)
+
+  _ipcCleanups.push(
+    () => window.electron.ipcRenderer.removeListener('collab:extractionProgress', onProgress),
+    () => window.electron.ipcRenderer.removeListener('collab:extractionDone', onDone),
+    () => window.electron.ipcRenderer.removeListener('collab:extractionError', onError),
+  )
 }
 
 onMounted(async () => {
   await Promise.all([loadTasks(), loadExtractionStatus()])
   setupExtractionListeners()
+})
+
+onUnmounted(() => {
+  _ipcCleanups.forEach((fn) => fn())
+  _ipcCleanups.length = 0
 })
 
 watch(() => props.sessionId, async () => {
@@ -154,38 +173,26 @@ function isOverdue(task: any): boolean {
 // 快速完成任务
 async function completeTask(taskId: number) {
   if (isBrowserEnvironment()) return
-  await window.collabApi?.updateTask(taskId, { status: 'completed' })
-  taskStore.updateTask(taskId, { status: 'completed' })
+  const result = await window.collabApi?.updateTask(taskId, { status: 'completed' })
+  if (result?.success) {
+    taskStore.updateTask(taskId, { status: 'completed' })
+  } else {
+    console.error('[TaskTab] completeTask failed:', result?.error)
+  }
 }
 
-// 查看来源消息
+// 查看来源消息（打开面板并派发事件）
 function viewSource(task: any) {
   if (!task.sources || task.sources.length === 0) return
   const src = task.sources[0]
   sourceViewerData.value = { sessionId: src.sessionId, messageId: src.messageId }
   showSourceViewer.value = true
+  window.dispatchEvent(new CustomEvent('open-chat-record', {
+    detail: { sessionId: src.sessionId, messageId: src.messageId },
+  }))
 }
 
 // 排序控件
-const sortOptions = [
-  { label: '截止时间', value: 'due' },
-  { label: '创建时间', value: 'created' },
-  { label: '更新时间', value: 'updated' },
-]
-function toggleSortOrder() {
-  const next = filter.value.sortOrder === 'asc' ? 'desc' : 'asc'
-  taskStore.setFilter({ sortOrder: next })
-}
-
-// 查看来源消息
-function viewSource(task: any) {
-  if (!task.sources || task.sources.length === 0) return
-  const src = task.sources[0]
-  const event = new CustomEvent('open-chat-record', {
-    detail: { sessionId: src.sessionId, messageId: src.messageId },
-  })
-  window.dispatchEvent(event)
-}
 
 // 新建任务对话框
 const showCreateDialog = ref(false)
@@ -245,9 +252,13 @@ async function saveEdit() {
     dueTs: editForm.value.dueTs ? new Date(editForm.value.dueTs).getTime() : undefined,
     isManual: true,
   }
-  await window.collabApi?.updateTask(editingTask.value.id, updates)
-  taskStore.updateTask(editingTask.value.id, updates)
-  closeEdit()
+  const result = await window.collabApi?.updateTask(editingTask.value.id, updates)
+  if (result?.success) {
+    taskStore.updateTask(editingTask.value.id, updates)
+    closeEdit()
+  } else {
+    console.error('[TaskTab] saveEdit failed:', result?.error)
+  }
 }
 </script>
 
