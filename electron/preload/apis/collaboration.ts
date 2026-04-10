@@ -146,6 +146,19 @@ export const collabApi = {
     topN?: number
   ): Promise<CollabApiResult<Array<{ id: number; name: string; messageCount: number }>>> =>
     ipcRenderer.invoke('collab:getSessionTopMembers', sessionId, topN),
+
+  // ==================== 测试辅助（also used by production flows）====================
+  incrementFocusMentionCount: (focusId: number, sessionId: string): Promise<CollabApiResult> =>
+    ipcRenderer.invoke('collab:incrementFocusMentionCount', focusId, sessionId),
+
+  addTaskSource: (
+    taskId: number,
+    sessionId: string,
+    messageId: number,
+    messageTs: number,
+    confidence?: number
+  ): Promise<CollabApiResult> =>
+    ipcRenderer.invoke('collab:addTaskSource', taskId, sessionId, messageId, messageTs, confidence),
 }
 
 /** CollabApi 类型，供 Window 接口扩展使用 */

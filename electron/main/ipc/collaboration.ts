@@ -380,6 +380,26 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
+  ipcMain.handle('collab:incrementFocusMentionCount', async (_event, focusId: number, sessionId: string) => {
+    try {
+      focusService.incrementMentionCount(focusId, sessionId)
+      return { success: true }
+    } catch (error) {
+      console.error('[Collaboration] incrementFocusMentionCount failed:', error)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('collab:addTaskSource', async (_event, taskId: number, sessionId: string, messageId: number, messageTs: number, confidence?: number) => {
+    try {
+      taskService.addTaskSource(taskId, sessionId, messageId, messageTs, confidence)
+      return { success: true }
+    } catch (error) {
+      console.error('[Collaboration] addTaskSource failed:', error)
+      return { success: false, error: String(error) }
+    }
+  })
+
   ipcMain.handle('collab:getFocusActivity', async (_event, focusId: number, limit?: number) => {
     try {
       return { success: true, data: focusService.getFocusActivity(focusId, limit) }
