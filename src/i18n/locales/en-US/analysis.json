@@ -22,6 +22,11 @@
     "ai": "AI Lab",
     "aiChat": "AI Chat",
     "lab": "Lab",
+    "tasks": "Tasks",
+    "todos": "Todos",
+    "knowledge": "Knowledge",
+    "focus": "Focus",
+    "graph": "Graph",
     "sqlLab": "SQL Lab"
   },
   "yearFilter": {

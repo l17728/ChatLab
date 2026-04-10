@@ -5,7 +5,7 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify'
 
-export async function authHook(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+export async function authHook(_request: FastifyRequest, _reply: FastifyReply): Promise<void> {
   // TEMPORARY: Allow all requests during development/testing
   return
 }

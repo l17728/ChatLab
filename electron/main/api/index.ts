@@ -11,6 +11,7 @@ import { registerSessionRoutes } from './routes/sessions'
 import { registerImportRoutes } from './routes/import'
 import { registerWebUIRoutes } from './routes/webui'
 import { registerAdminRoutes } from './routes/admin'
+import { registerCollaborationRoutes } from './routes/collaboration'
 import { registerStaticFiles } from './static'
 import { join } from 'path'
 
@@ -51,6 +52,7 @@ export async function start(): Promise<void> {
     registerImportRoutes(server)
     registerWebUIRoutes(server)
     registerAdminRoutes(server)
+    registerCollaborationRoutes(server)
 
     // Register static file serving for Web UI
     const buildOutDir = join(__dirname, '../../out/renderer')

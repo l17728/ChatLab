@@ -22,6 +22,11 @@
     "ai": "AIラボ",
     "aiChat": "AIチャット",
     "lab": "ラボ",
+    "tasks": "タスク",
+    "todos": "ToDo",
+    "knowledge": "ナレッジ",
+    "focus": "フォーカス",
+    "graph": "知識グラフ",
     "sqlLab": "SQLラボ"
   },
   "yearFilter": {

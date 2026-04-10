@@ -6,7 +6,7 @@
 
 import * as fs from 'fs-extra'
 import * as path from 'path'
-import { randomBytes, createHash, pbkdf2Sync } from 'crypto'
+import { randomBytes, pbkdf2Sync } from 'crypto'
 import { app } from 'electron'
 
 // ==================== Types ====================
@@ -37,7 +37,6 @@ export interface PasswordHashResult {
 // ==================== Constants ====================
 
 const DB_FILE = 'webui-users.json'
-const HASH_ALGORITHM = 'pbkdf2' // Using Node.js built-in instead of bcrypt (no external dependency)
 const HASH_ITERATIONS = 100000
 const HASH_KEYLEN = 64
 const HASH_DIGEST = 'sha256'
@@ -80,7 +79,6 @@ function saveDatabase(db: UserDatabase): void {
     const dbPath = getDatabasePath()
     fs.ensureDirSync(path.dirname(dbPath))
 
-    const backup = db
     db.updatedAt = Date.now()
 
     fs.writeJsonSync(dbPath, db, { spaces: 2 })

@@ -8,6 +8,7 @@ import Sidebar from '@/components/common/Sidebar.vue'
 import ScreenCaptureModal from '@/components/common/ScreenCaptureModal.vue'
 import { ChatRecordDrawer } from '@/components/common/ChatRecord'
 import GlobalTaskBar from '@/components/AIChat/GlobalTaskBar.vue'
+import IdentityToast from '@/components/identity/IdentityToast.vue'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
@@ -30,6 +31,34 @@ const tooltip = {
 // 浏览器环境 = Web UI 模式，不需要等待 Electron IPC 初始化
 const isWebUI = isBrowserEnvironment()
 
+// 身份识别 Layer 2 — 导入后检查是否需要提示配置身份
+async function handleSuggestIdentitySetup(_event: Electron.IpcRendererEvent, payload: { sessionId: string }) {
+  const { globalNicknames } = settingsStore.identityConfig
+  if (globalNicknames.length > 0) return // 已配置，无需提示
+
+  // 查询该会话发言量 Top 3 成员作为候选
+  const result = await window.collabApi?.getSessionTopMembers(payload.sessionId, 3)
+  if (result?.success && result.data && result.data.length > 0) {
+    // 展示交互式身份推荐 Toast（复用 IdentityToast.vue 的 collab:showIdentityToast）
+    window.dispatchEvent(
+      new CustomEvent('collab:showIdentityToast', {
+        detail: { candidates: result.data },
+      })
+    )
+  } else {
+    // 无成员数据，退回静态提示
+    window.dispatchEvent(
+      new CustomEvent('collab:showSimpleToast', {
+        detail: {
+          title: '已导入聊天记录',
+          description: '建议前往「设置 > 我的身份」配置昵称，以便 AI 正确识别您的发言',
+        },
+      })
+    )
+  }
+  console.log('[App] Identity setup suggestion shown for session:', payload.sessionId)
+}
+
 // 应用启动时初始化
 onMounted(async () => {
   console.log('[App] onMounted - isWebUI:', isWebUI, 'isElectron:', !isWebUI)
@@ -49,6 +78,9 @@ onMounted(async () => {
     console.log('[App] WebUI sessions loaded, isInitialized:', sessionStore.isInitialized)
     return
   }
+
+  // 监听导入后身份设置建议（Layer 2）
+  window.electron?.ipcRenderer.on('collab:suggestIdentitySetup', handleSuggestIdentitySetup)
 
   // 平台检测 - 设置 CSS 类名以驱动平台差异化样式（如标题栏安全区域高度）
   const platform = navigator.platform.toLowerCase()
@@ -112,6 +144,8 @@ onMounted(async () => {
     <ChatRecordDrawer />
     <!-- 全局 AI 后台任务条：允许用户离开当前页面后仍然快速返回进行中的对话。 -->
     <GlobalTaskBar />
+    <!-- 身份推荐 Toast（Layer 2：导入后非侵入式引导） -->
+    <IdentityToast />
   </UApp>
 </template>
 

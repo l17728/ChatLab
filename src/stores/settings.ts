@@ -11,6 +11,26 @@ import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const LOCALE_SET_KEY = 'chatlab_locale_set_by_user'
 
+/**
+ * 用户身份配置接口
+ */
+export interface IdentityConfig {
+  // 跨群通用昵称关键词（如 ['张三', '小张']）
+  globalNicknames: string[]
+  // 匹配策略：exact（精确） | fuzzy（模糊）| none（不匹配）
+  matchStrategy: 'exact' | 'fuzzy' | 'none'
+  // 会话级别的覆盖映射 (sessionId -> memberId)
+  sessionOverrides: Record<string, string>
+}
+
+/**
+ * Web UI 配置接口
+ */
+export interface WebUIConfig {
+  enabled: boolean
+  port: number
+}
+
 export const useSettingsStore = defineStore(
   'settings',
   () => {
@@ -19,6 +39,19 @@ export const useSettingsStore = defineStore(
     const defaultSessionTab = ref<'overview' | 'ai-chat'>('overview')
 
     const debugMode = ref(false)
+
+    // 用户身份配置
+    const identityConfig = ref<IdentityConfig>({
+      globalNicknames: [],
+      matchStrategy: 'fuzzy',
+      sessionOverrides: {},
+    })
+
+    // Web UI 配置
+    const webUIConfig = ref<WebUIConfig>({
+      enabled: false,
+      port: 9871,
+    })
 
     function setDebugMode(enabled: boolean) {
       debugMode.value = enabled
@@ -119,6 +152,8 @@ export const useSettingsStore = defineStore(
       setDebugMode,
       aiPreprocessConfig,
       ensureDesensitizeRules,
+      identityConfig,
+      webUIConfig,
     }
   },
   {

@@ -7,8 +7,19 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as worker from '../../worker/workerManager'
-import { successResponse, errorResponse, ApiError, conversationNotFound, sessionNotFound, invalidFormat, serverError } from '../errors'
-import { handleLogin, handleLogout, handleRegister, jwtAuthMiddleware, handleChangePassword, verifyToken } from '../auth-db'
+import { successResponse, errorResponse, ApiError, ApiErrorCode, conversationNotFound, sessionNotFound, invalidFormat, serverError } from '../errors'
+import { handleLogin, handleLogout, handleRegister, handleChangePassword, verifyToken } from '../auth-db'
+import { getActiveConfig, buildPiModel } from '../../ai/llm/index'
+import { streamSimple, completeSimple, type Message as PiMessage, type TextContent as PiTextContent } from '@mariozechner/pi-ai'
+import * as webuiDb from '../../database/global/webui'
+
+function toPiMessages(msgs: Array<{ role: string; content: string }>): PiMessage[] {
+  return msgs.map((m) => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+    timestamp: Date.now(),
+  })) as unknown as PiMessage[]
+}
 
 // ==================== Types ====================
 
@@ -27,28 +38,9 @@ interface GetMessagesQuery {
   offset?: string
 }
 
-// ==================== In-Memory Storage ====================
-// In production, persist these to a database
-
-interface Conversation {
-  id: string
-  sessionId: string
-  title: string | null
-  assistantId: string
-  createdAt: number
-  updatedAt: number
-}
-
-interface Message {
-  id: string
-  conversationId: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: number
-}
-
-const conversations = new Map<string, Conversation>()
-const messages = new Map<string, Message[]>()
+// Alias DB types for use in handlers
+type Conversation = webuiDb.WebUIConversation
+type Message = webuiDb.WebUIMessage
 
 // ==================== Utility Functions ====================
 
@@ -74,7 +66,7 @@ function logOperation(
 /**
  * Verify request authentication using JWT middleware
  */
-async function verifyRequest(request: FastifyRequest, reply: FastifyReply): Promise<{ valid: boolean; userId?: string; username?: string }> {
+async function verifyRequest(request: FastifyRequest, _reply: FastifyReply): Promise<{ valid: boolean; userId?: string; username?: string }> {
   try {
     const authHeader = request.headers.authorization
 
@@ -86,8 +78,8 @@ async function verifyRequest(request: FastifyRequest, reply: FastifyReply): Prom
     const token = authHeader.slice(7)
     const result = verifyToken(token)
 
-    if (!result.success) {
-      console.log('[WebUI Auth] Token verification failed:', result.error)
+    if (!result.valid) {
+      console.log('[WebUI Auth] Token verification failed')
       return { valid: false }
     }
 
@@ -140,7 +132,7 @@ async function handleAuthLogin(
       })
     } else {
       logOperation('LOGIN_FAILED', `User: ${username}`, { error: result.error })
-      const err = new ApiError('LOGIN_FAILED', result.error || 'Login failed')
+      const err = new ApiError(ApiErrorCode.LOGIN_FAILED, result.error || 'Login failed')
       return reply.code(401).send(errorResponse(err))
     }
   } catch (error) {
@@ -181,7 +173,7 @@ async function handleAuthRegister(
       })
     } else {
       logOperation('REGISTER_FAILED', `User: ${username}`, { error: result.error })
-      const err = new ApiError('INVALID_FORMAT', result.error || 'Registration failed')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, result.error || 'Registration failed')
       return reply.code(400).send(errorResponse(err))
     }
   } catch (error) {
@@ -202,7 +194,7 @@ async function handleAuthLogout(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -231,7 +223,7 @@ async function handleChangePasswordEndpoint(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -251,7 +243,7 @@ async function handleChangePasswordEndpoint(
       return successResponse({ success: true })
     } else {
       logOperation('CHANGE_PASSWORD_FAILED', `User: ${verification.username}`, { error: result.error })
-      const err = new ApiError('INVALID_FORMAT', result.error || 'Password change failed')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, result.error || 'Password change failed')
       return reply.code(400).send(errorResponse(err))
     }
   } catch (error) {
@@ -274,7 +266,7 @@ async function listSessionsHandler(
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
       console.log('[WebUI Auth] Unauthorized access to list sessions')
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -313,7 +305,7 @@ async function getSessionHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -352,7 +344,7 @@ async function createConversationHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -379,8 +371,7 @@ async function createConversationHandler(
       updatedAt: now,
     }
 
-    conversations.set(conversationId, conversation)
-    messages.set(conversationId, [])
+    webuiDb.createConversation(conversation)
 
     logOperation('CREATE_CONVERSATION_SUCCESS', `Conversation: ${conversationId}`, {
       sessionId,
@@ -406,7 +397,7 @@ async function listConversationsHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -422,9 +413,7 @@ async function listConversationsHandler(
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
-    const sessionConversations = Array.from(conversations.values()).filter(
-      c => c.sessionId === sessionId
-    )
+    const sessionConversations = webuiDb.listConversationsBySession(sessionId)
 
     logOperation('LIST_CONVERSATIONS_SUCCESS', `Session: ${sessionId}`, {
       count: sessionConversations.length,
@@ -449,7 +438,7 @@ async function deleteConversationHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -457,14 +446,13 @@ async function deleteConversationHandler(
 
     logOperation('DELETE_CONVERSATION', `Conversation: ${conversationId}`)
 
-    if (!conversations.has(conversationId)) {
+    if (!webuiDb.getConversation(conversationId)) {
       logOperation('DELETE_CONVERSATION_NOT_FOUND', `Conversation: ${conversationId}`)
       const err = conversationNotFound(conversationId)
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
-    conversations.delete(conversationId)
-    messages.delete(conversationId)
+    webuiDb.deleteConversation(conversationId)
 
     logOperation('DELETE_CONVERSATION_SUCCESS', `Conversation: ${conversationId}`)
 
@@ -490,7 +478,7 @@ async function sendMessageHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -501,7 +489,7 @@ async function sendMessageHandler(
       contentLength: content?.length,
     })
 
-    if (!conversations.has(conversationId)) {
+    if (!webuiDb.getConversation(conversationId)) {
       logOperation('SEND_MESSAGE_CONVERSATION_NOT_FOUND', `Conversation: ${conversationId}`)
       const err = conversationNotFound(conversationId)
       return reply.code(err.statusCode).send(errorResponse(err))
@@ -522,14 +510,42 @@ async function sendMessageHandler(
       timestamp: Date.now(),
     }
 
-    const conversationMessages = messages.get(conversationId) || []
-    conversationMessages.push(userMessage)
-    messages.set(conversationId, conversationMessages)
+    webuiDb.insertMessage(userMessage)
+    webuiDb.updateConversationTs(conversationId, userMessage.timestamp)
 
-    // Update conversation updatedAt
-    const conversation = conversations.get(conversationId)
-    if (conversation) {
-      conversation.updatedAt = Date.now()
+    // Call real AI engine
+    const activeConfig = getActiveConfig()
+    if (activeConfig) {
+      try {
+        const piModel = buildPiModel(activeConfig)
+        const historyMsgs = toPiMessages(
+          webuiDb.getLastMessages(conversationId, 20).map((m) => ({ role: m.role, content: m.content }))
+        )
+        const result = await completeSimple(
+          piModel,
+          { messages: historyMsgs },
+          { apiKey: activeConfig.apiKey }
+        )
+        const aiContent = result.content
+          .filter((item): item is PiTextContent => item.type === 'text')
+          .map((item) => item.text)
+          .join('')
+        const assistantMessage: Message = {
+          id: generateId(),
+          conversationId,
+          role: 'assistant',
+          content: aiContent,
+          timestamp: Date.now(),
+        }
+        webuiDb.insertMessage(assistantMessage)
+        webuiDb.updateConversationTs(conversationId, assistantMessage.timestamp)
+        logOperation('SEND_MESSAGE_AI_RESPONSE', `Conversation: ${conversationId}`, {
+          aiContentLength: aiContent.length,
+        })
+      } catch (aiError) {
+        console.error('[WebUI API] AI call failed:', aiError)
+        // Non-fatal: user message was stored, AI response missing
+      }
     }
 
     logOperation('SEND_MESSAGE_SUCCESS', `Conversation: ${conversationId}`, {
@@ -546,6 +562,111 @@ async function sendMessageHandler(
 }
 
 /**
+ * GET /api/webui/conversations/:conversationId/stream
+ * Stream AI response via SSE for a pending user message
+ */
+async function streamMessageHandler(
+  request: FastifyRequest<{
+    Params: { conversationId: string }
+    Querystring: { content: string }
+  }>,
+  reply: FastifyReply
+): Promise<any> {
+  const verification = await verifyRequest(request, reply)
+  if (!verification.valid) {
+    reply.code(401).send({ error: 'Unauthorized' })
+    return
+  }
+
+  const { conversationId } = request.params
+  const content = (request.query as any).content as string | undefined
+
+  if (!webuiDb.getConversation(conversationId)) {
+    reply.code(404).send({ error: 'Conversation not found' })
+    return
+  }
+
+  if (!content || content.trim().length === 0) {
+    reply.code(400).send({ error: 'content query param required' })
+    return
+  }
+
+  // Store user message
+  const userMsgId = generateId()
+  const userMessage: Message = {
+    id: userMsgId,
+    conversationId,
+    role: 'user',
+    content: content.trim(),
+    timestamp: Date.now(),
+  }
+  webuiDb.insertMessage(userMessage)
+  webuiDb.updateConversationTs(conversationId, userMessage.timestamp)
+
+  // SSE headers
+  reply.raw.setHeader('Content-Type', 'text/event-stream')
+  reply.raw.setHeader('Cache-Control', 'no-cache')
+  reply.raw.setHeader('Connection', 'keep-alive')
+  reply.raw.flushHeaders()
+
+  const sendEvent = (event: string, data: object) => {
+    reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+
+  // Emit user message first
+  sendEvent('user_message', userMessage)
+
+  const activeConfig = getActiveConfig()
+  if (!activeConfig) {
+    sendEvent('error', { message: 'No active AI configuration' })
+    reply.raw.end()
+    return
+  }
+
+  const assistantMsgId = generateId()
+  let fullContent = ''
+
+  try {
+    const piModel = buildPiModel(activeConfig)
+    const historyMsgs = toPiMessages(
+      webuiDb.getLastMessages(conversationId, 20).map((m) => ({ role: m.role, content: m.content }))
+    )
+
+    const eventStream = streamSimple(
+      piModel,
+      { messages: historyMsgs },
+      { apiKey: activeConfig.apiKey }
+    )
+
+    for await (const event of eventStream) {
+      if (event.type === 'text_delta') {
+        fullContent += event.delta
+        sendEvent('content', { type: 'content', text: event.delta })
+      }
+    }
+  } catch (err) {
+    console.error('[WebUI API] SSE stream error:', err)
+    sendEvent('error', { message: err instanceof Error ? err.message : String(err) })
+    reply.raw.end()
+    return
+  }
+
+  // Store assistant message
+  const assistantMessage: Message = {
+    id: assistantMsgId,
+    conversationId,
+    role: 'assistant',
+    content: fullContent,
+    timestamp: Date.now(),
+  }
+  webuiDb.insertMessage(assistantMessage)
+  webuiDb.updateConversationTs(conversationId, assistantMessage.timestamp)
+
+  sendEvent('done', { type: 'done', messageId: assistantMsgId })
+  reply.raw.end()
+}
+
+/**
  * GET /api/webui/conversations/:conversationId/messages
  * Get messages from conversation (paginated)
  */
@@ -559,7 +680,7 @@ async function getMessagesHandler(
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Invalid or missing token')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -569,15 +690,14 @@ async function getMessagesHandler(
 
     logOperation('GET_MESSAGES', `Conversation: ${conversationId}`, { limit, offset })
 
-    if (!conversations.has(conversationId)) {
+    if (!webuiDb.getConversation(conversationId)) {
       logOperation('GET_MESSAGES_CONVERSATION_NOT_FOUND', `Conversation: ${conversationId}`)
       const err = conversationNotFound(conversationId)
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
-    const conversationMessages = messages.get(conversationId) || []
-    const total = conversationMessages.length
-    const paginatedMessages = conversationMessages.slice(offset, offset + limit)
+    const paginatedMessages = webuiDb.getMessages(conversationId, limit, offset)
+    const total = paginatedMessages.length + offset // approximate
 
     logOperation('GET_MESSAGES_SUCCESS', `Conversation: ${conversationId}`, {
       total,
@@ -665,6 +785,15 @@ export function registerWebUIRoutes(server: FastifyInstance): void {
     '/api/webui/conversations/:conversationId/messages',
     { logLevel: 'warn' },
     sendMessageHandler
+  )
+
+  server.get<{
+    Params: { conversationId: string }
+    Querystring: { content: string }
+  }>(
+    '/api/webui/conversations/:conversationId/stream',
+    { logLevel: 'warn' },
+    streamMessageHandler
   )
 
   server.get<{

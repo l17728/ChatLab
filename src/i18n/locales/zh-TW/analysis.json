@@ -22,6 +22,11 @@
     "ai": "AI 實驗室",
     "aiChat": "AI 對話",
     "lab": "實驗室",
+    "tasks": "任務",
+    "todos": "待辦",
+    "knowledge": "知識庫",
+    "focus": "關注點",
+    "graph": "知識圖譜",
     "sqlLab": "SQL 實驗室"
   },
   "yearFilter": {

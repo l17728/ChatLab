@@ -264,7 +264,7 @@ export function verifyAuthToken(token: string): { valid: boolean; message?: stri
  */
 export async function jwtAuthMiddleware(
   request: FastifyRequest,
-  reply: FastifyReply
+  _reply: FastifyReply
 ): Promise<boolean> {
   const authHeader = request.headers.authorization
   if (!authHeader || !authHeader.startsWith('Bearer ')) {

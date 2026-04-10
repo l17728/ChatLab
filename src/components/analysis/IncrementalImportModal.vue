@@ -8,6 +8,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileDropZone } from '@/components/UI'
 import type { ImportProgress } from '@/types/base'
+import { triggerIdentityToastAfterImport } from '@/composables/useIdentityToast'
 
 const props = defineProps<{
   modelValue: boolean
@@ -159,6 +160,11 @@ async function executeImport() {
     if (result.success) {
       importResult.value = { newMessageCount: result.newMessageCount }
       stage.value = 'done'
+      // Layer 2: 增量导入成功后触发身份推荐 Toast
+      console.log('[IncrementalImport] 导入成功，触发身份 Toast，sessionId:', props.sessionId)
+      setTimeout(() => {
+        triggerIdentityToastAfterImport(props.sessionId)
+      }, 1000)
     } else {
       stage.value = 'error'
       errorMessage.value = translateError(result.error || 'error.import_failed')

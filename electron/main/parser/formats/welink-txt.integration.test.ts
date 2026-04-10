@@ -168,8 +168,8 @@ describe('华为 Welink TXT 格式解析器 - 格式边界测试', () => {
         assert.notEqual(feature.id, 'welink-txt', 'QQ 格式不应该被识别为 welink-txt')
         assert.equal(feature.id, 'qq-native-txt', '应该被识别为 qq-native-txt 格式')
       } else {
-        // 如果未识别到任何格式，也是可以接受的（说明不匹配 welink-txt）
-        assert.ok(!feature || feature.id !== 'welink-txt', '不应该被识别为 welink-txt')
+        // feature 为 falsy，未识别到任何格式，说明不匹配 welink-txt，符合预期
+        assert.ok(true, '未识别到格式，不是 welink-txt，符合预期')
       }
     } finally {
       cleanupTempFile(filePath)

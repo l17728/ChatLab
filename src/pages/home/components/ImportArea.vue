@@ -7,6 +7,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type BatchFileInfo, type MergeFileInfo } from '@/stores/session'
+import { triggerIdentityToastAfterImport } from '@/composables/useIdentityToast'
 
 const { t } = useI18n()
 const sessionStore = useSessionStore()
@@ -181,6 +182,10 @@ async function processFilePaths(paths: string[]) {
         }
       } else if (result.success && sessionStore.currentSessionId) {
         await navigateToSession(sessionStore.currentSessionId)
+        // Layer 2: 导入后身份推荐 Toast（延迟 1s 等页面稳定）
+        setTimeout(() => {
+          triggerIdentityToastAfterImport(sessionStore.currentSessionId!)
+        }, 1000)
       }
     } else {
       // 多文件批量导入（未启用合并）

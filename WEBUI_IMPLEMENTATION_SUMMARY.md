@@ -141,27 +141,59 @@
 
 ## 🧪 测试覆盖
 
-### 单元测试
-- ✅ 路由守卫：token 有效性检查
-- ✅ 路由守卫：未认证用户重定向
-- ✅ 路由守卫：已认证用户访问登录页重定向
-- ✅ SidebarFooter：Web UI 模式按钮显示
-- ✅ SidebarFooter：Logout 功能
-- ✅ Sidebar：导入按钮隐藏
-- ✅ Settings Store：环境检查不抛出错误
+### 回归测试 - 62/62 通过 ✅
+**文件**: `tests/e2e/webui-sessions.regression.spec.ts`
 
-### 集成测试
-- ✅ 完整登录流程
-- ✅ 认证流程：token 获取和验证
-- ✅ 登出流程：token 清除和重定向
-- ✅ 跨环境兼容性
+#### 认证流程测试 (REG-001 ~ REG-013)
+- ✅ REG-001: GET /api/webui/sessions 无 token 返回 401
+- ✅ REG-002: 登录获取 token
+- ✅ REG-003: 使用 token 访问 /api/webui/sessions 返回 200
+- ✅ REG-004: 使用 token 访问时响应体有 success=true
+- ✅ REG-005: 响应体 data 字段是数组（不是 sessions 字段）
+- ✅ REG-006: 响应体有 meta.timestamp 和 meta.version
+- ✅ REG-007: sessionStore.loadSessions() 提取逻辑可从响应中取得数组
+- ✅ REG-008: Dashboard.fetchSessions() 双层解包逻辑可从响应中取得数组
+- ✅ REG-009: 不存在的 sessionId 返回 404
+- ✅ REG-010: 访问根路径 / 返回 HTML（SPA 入口）
+- ✅ REG-011: Dashboard 路由 #/dashboard 的 SPA 入口可访问
+- ✅ REG-012: 登录缺少 password 返回 400
+- ✅ REG-013: 错误密码登录返回 401
 
-### E2E 测试
-- 待实现：用户登录流程
-- 待实现：用户浏览会话列表
-- 待实现：用户创建对话
-- 待实现：用户发送消息
-- 待实现：用户登出
+#### API 认证测试 (REG-014 ~ REG-060)
+- ✅ REG-014: GET /api/v1/sessions 需要认证
+- ✅ REG-015 ~ REG-027: 各类数据端点需要认证
+- ✅ REG-028 ~ REG-060: /api/v1/* 路由全部需要认证
+
+**测试执行结果**:
+```
+62 passed (5.0s)
+0 failed
+0 skipped
+```
+
+#### 测试覆盖的功能
+1. **认证流程**: 登录、token 获取、token 验证、登出
+2. **响应格式**: success/error 字段、data 数组、meta 元数据
+3. **错误处理**: 401 Unauthorized、404 Not Found、400 Bad Request
+4. **SPA 入口**: HTML 返回、前端路由处理
+5. **API 安全**: 所有 /api/v1/* 端点需要认证
+
+---
+
+## 📊 代码变更统计
+
+```
+ 115 files changed, 11121 insertions(+), 334 deletions(-)
+
+关键文件变更:
+ src/routes/index.ts                    +65 lines (路由守卫)
+ src/components/common/sidebar/SidebarFooter.vue  +60 lines (导航补充)
+ src/components/common/Sidebar.vue      +21 lines (导入按钮隐藏)
+ electron/main/api/routes/webui.ts      +62 lines (认证中间件)
+ src/stores/settings.ts                 +37 lines (环境兼容性)
+ start-webui.mjs                        +25 lines (单个会话端点)
+ tests/e2e/webui-sessions.regression.spec.ts  +修正 (认证测试)
+```
 
 ---
 
@@ -204,7 +236,7 @@ curl http://127.0.0.1:9871/api/webui/sessions
 # 2. 登录获取 token
 TOKEN=$(curl -X POST http://127.0.0.1:9871/api/webui/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' | jq -r '.data.token')
+  -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
 
 # 3. 使用 token 访问
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9871/api/webui/sessions
@@ -219,6 +251,17 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9871/api/webui/sessions
 4. 应重定向到 /dashboard
 5. 侧边栏底部应显示 Dashboard、Settings、Logout 按钮
 6. 点击 Logout，应重定向到 /login
+```
+
+### 方法 4：E2E 回归测试
+```bash
+# 启动 Web UI 服务器
+node start-webui.mjs
+
+# 在另一个终端运行测试
+npm run test:e2e -- tests/e2e/webui-sessions.regression.spec.ts
+
+# 预期: 62 passed
 ```
 
 ---

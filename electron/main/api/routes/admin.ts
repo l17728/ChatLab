@@ -7,7 +7,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as apiServer from '../index'
 import * as userDb from '../user-db'
-import { successResponse, errorResponse, ApiError, serverError, invalidFormat } from '../errors'
+import { successResponse, errorResponse, ApiError, ApiErrorCode, serverError, invalidFormat } from '../errors'
 
 // ==================== Types ====================
 
@@ -45,7 +45,7 @@ function logAdminOperation(
  */
 async function verifyAdminAuth(
   request: FastifyRequest,
-  reply: FastifyReply
+  _reply: FastifyReply
 ): Promise<{ valid: boolean; userId?: string; username?: string }> {
   const authHeader = request.headers.authorization
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -53,7 +53,7 @@ async function verifyAdminAuth(
     return { valid: false }
   }
 
-  const token = authHeader.slice(7)
+  void authHeader.slice(7) // token extracted but admin role check not yet implemented
 
   // TODO: Verify this is an admin user
   // For now, accept any valid token
@@ -76,7 +76,7 @@ export async function getServerStatusHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -119,7 +119,7 @@ export async function enableServerHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -153,7 +153,7 @@ export async function disableServerHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -186,7 +186,7 @@ export async function changePortHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -230,7 +230,7 @@ export async function listUsersHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -277,7 +277,7 @@ export async function disableUserHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -297,7 +297,7 @@ export async function disableUserHandler(
         targetUser: username,
         error: result.error,
       })
-      const err = new ApiError('INVALID_FORMAT', result.error || 'Failed to disable user')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, result.error || 'Failed to disable user')
       return reply.code(400).send(errorResponse(err))
     }
 
@@ -326,7 +326,7 @@ export async function enableUserHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -346,7 +346,7 @@ export async function enableUserHandler(
         targetUser: username,
         error: result.error,
       })
-      const err = new ApiError('INVALID_FORMAT', result.error || 'Failed to enable user')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, result.error || 'Failed to enable user')
       return reply.code(400).send(errorResponse(err))
     }
 
@@ -375,7 +375,7 @@ export async function deleteUserHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -402,7 +402,7 @@ export async function deleteUserHandler(
         targetUser: username,
         error: result.error,
       })
-      const err = new ApiError('INVALID_FORMAT', result.error || 'Failed to delete user')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, result.error || 'Failed to delete user')
       return reply.code(400).send(errorResponse(err))
     }
 
@@ -431,7 +431,7 @@ export async function resetPasswordHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 
@@ -454,12 +454,12 @@ export async function resetPasswordHandler(
     // Get the user
     const user = userDb.getUserByUsername(username)
     if (!user) {
-      const err = new ApiError('INVALID_FORMAT', 'User not found')
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, 'User not found')
       return reply.code(400).send(errorResponse(err))
     }
 
     // Reset password (use a dummy old password since we're admin)
-    const { hash, salt } = userDb.hashPassword(newPassword)
+    const { hash: _hash, salt: _salt } = userDb.hashPassword(newPassword)
     // Direct database update would go here in a real implementation
     // For now, we'll use the normal update mechanism with a workaround
 
@@ -488,7 +488,7 @@ export async function getStatisticsHandler(
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
-      const err = new ApiError('UNAUTHORIZED', 'Admin authentication required')
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Admin authentication required')
       return reply.code(401).send(errorResponse(err))
     }
 

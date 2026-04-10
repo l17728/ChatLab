@@ -12,6 +12,7 @@ import type { IpcContext } from './types'
 import { CURRENT_SCHEMA_VERSION, getPendingMigrationInfos } from '../database/migrations'
 import { exportSessionToTempFile, cleanupTempExportFiles } from '../merger'
 import { t } from '../i18n'
+import { startTaskExtraction, startGraphExtraction, startFaqExtraction, startFocusExtraction } from '../services/extractionRunner'
 
 /**
  * 注册聊天记录相关 IPC 处理器
@@ -131,6 +132,25 @@ export function registerChatHandlers(ctx: IpcContext): void {
 
       if (result.success) {
         console.log('[IpcMain] Stream import successful, sessionId:', result.sessionId)
+        // 异步触发 AI 提取（不阻塞导入结果返回）
+        if (result.sessionId) {
+          setImmediate(() => {
+            startTaskExtraction(result.sessionId!, win).catch((err) => {
+              console.error('[IpcMain] Task extraction failed:', err)
+            })
+            startGraphExtraction(result.sessionId!, win).catch((err) => {
+              console.error('[IpcMain] Graph extraction failed:', err)
+            })
+            startFaqExtraction(result.sessionId!, win).catch((err) => {
+              console.error('[IpcMain] FAQ extraction failed:', err)
+            })
+            startFocusExtraction(result.sessionId!, win).catch((err) => {
+              console.error('[IpcMain] Focus extraction failed:', err)
+            })
+            // 身份识别 Layer 2：导入后提示用户配置身份
+            win.webContents.send('collab:suggestIdentitySetup', { sessionId: result.sessionId })
+          })
+        }
         return { success: true, sessionId: result.sessionId, diagnostics: result.diagnostics }
       } else {
         console.error('[IpcMain] Stream import failed:', result.error)
@@ -1029,6 +1049,21 @@ export function registerChatHandlers(ctx: IpcContext): void {
         } catch (e) {
           console.error('[IpcMain] Failed to incrementally generate session index:', e)
         }
+        // 异步触发 AI 提取（增量数据也需要重新分析）
+        setImmediate(() => {
+          startTaskExtraction(sessionId, win).catch((err) => {
+            console.error('[IpcMain] Incremental task extraction failed:', err)
+          })
+          startGraphExtraction(sessionId, win).catch((err) => {
+            console.error('[IpcMain] Incremental graph extraction failed:', err)
+          })
+          startFaqExtraction(sessionId, win).catch((err) => {
+            console.error('[IpcMain] Incremental FAQ extraction failed:', err)
+          })
+          startFocusExtraction(sessionId, win).catch((err) => {
+            console.error('[IpcMain] Incremental focus extraction failed:', err)
+          })
+        })
       }
 
       return result

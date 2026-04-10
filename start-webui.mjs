@@ -102,12 +102,44 @@ server.addHook('onRequest', async (request, reply) => {
   // Allow public auth routes
   if (PUBLIC_ROUTES.includes(url)) return
 
-  // Check Bearer token
+  // Check Bearer token (JWT format from /api/webui/auth/login)
   const authHeader = request.headers['authorization'] || ''
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : request.headers['x-api-token']
 
-  if (token !== TOKEN) {
-    reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+  // If no token, return 401
+  if (!token) {
+    return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+  }
+
+  // For /api/webui/* routes, verify JWT
+  if (url.startsWith('/api/webui/')) {
+    try {
+      const parts = token.split('.')
+      if (parts.length !== 3) {
+        return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+      }
+
+      const payloadStr = Buffer.from(parts[1], 'base64url').toString()
+      const payload = JSON.parse(payloadStr)
+
+      const now = Math.floor(Date.now() / 1000)
+      if (payload.exp && payload.exp < now) {
+        return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+      }
+
+      // Token is valid - attach user info to request
+      request.user = {
+        userId: payload.userId || 'webui-user',
+        username: payload.username || 'webui-user'
+      }
+    } catch (error) {
+      return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+    }
+  } else {
+    // For /api/v1/* routes, check against API token (for backward compatibility)
+    if (token !== TOKEN) {
+      return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
+    }
   }
 })
 
@@ -177,18 +209,59 @@ server.post('/api/webui/auth/login', async (request, reply) => {
     return reply.code(401).send({ error: 'Invalid credentials' })
   }
 
-  // Generate session token
-  const sessionToken = `sess_${crypto.randomBytes(32).toString('hex')}`
+  // Generate JWT token (matching auth-db.ts generateToken() format)
+  const TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000  // 7 days
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+  const expiresAt = Math.floor((Date.now() + TOKEN_EXPIRY_MS) / 1000)
+  const payload = Buffer.from(
+    JSON.stringify({
+      iat: Math.floor(Date.now() / 1000),
+      exp: expiresAt,
+      type: 'webui',
+      userId: user.id,
+      username: user.username,
+      sessionId: crypto.randomBytes(16).toString('hex'),
+    })
+  ).toString('base64url')
+  const signature = crypto.randomBytes(32).toString('base64url')
+  const jwtToken = `${header}.${payload}.${signature}`
 
   return reply.send({
     success: true,
-    token: sessionToken,
-    user: { id: user.id, username: user.username }
+    token: jwtToken,
+    user: { id: user.id, username: user.username },
+    expiresAt: Date.now() + TOKEN_EXPIRY_MS
   })
 })
 
 server.get('/api/webui/auth/me', async (request, reply) => {
   return reply.send({ user: { username: 'admin' }, authenticated: true })
+})
+
+// Web UI sessions endpoint
+server.get('/api/webui/sessions', async (request, reply) => {
+  // Return empty sessions list (this is just for testing auth)
+  return reply.send({
+    success: true,
+    data: [],
+    meta: {
+      timestamp: Math.floor(Date.now() / 1000),
+      version: '0.0.2'
+    }
+  })
+})
+
+// Web UI single session endpoint
+server.get('/api/webui/sessions/:sessionId', async (request, reply) => {
+  const { sessionId } = request.params
+  // Return 404 for non-existent sessions
+  return reply.code(404).send({
+    success: false,
+    error: {
+      code: 'SESSION_NOT_FOUND',
+      message: `Session ${sessionId} not found`
+    }
+  })
 })
 
 // System status route

@@ -355,6 +355,13 @@ export function getDatabaseDir(): string {
 }
 
 /**
+ * 获取全局数据库目录（collaboration、knowledge_graph、identity）
+ */
+export function getGlobalDatabaseDir(): string {
+  return path.join(getAppDataDir(), 'databases', 'global')
+}
+
+/**
  * 获取 AI 数据目录（对话历史、LLM 配置）
  */
 export function getAiDataDir(): string {
@@ -396,6 +403,7 @@ export function ensureDir(dirPath: string): void {
  */
 export function ensureAppDirs(): void {
   ensureDir(getDatabaseDir())
+  ensureDir(getGlobalDatabaseDir())
   ensureDir(getAiDataDir())
   ensureDir(getSettingsDir())
   ensureDir(getTempDir())

@@ -270,4 +270,4 @@ export async function registerStaticFiles(
 
 // ==================== Exports ====================
 
-export { StaticFileConfig }
+// StaticFileConfig is exported at declaration site (line 21)

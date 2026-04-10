@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useColorMode } from '@vueuse/core'
 import { availableLocales, type LocaleType } from '@/i18n'
 import NetworkSettingsSection from './NetworkSettingsSection.vue'
+import WebUISettingsSection from './WebUISettingsSection.vue'
 import UITabs from '@/components/UI/Tabs.vue'
 
 const { t } = useI18n()
@@ -145,5 +146,8 @@ watch(
 
     <!-- 网络设置 -->
     <NetworkSettingsSection />
+
+    <!-- Web UI 设置 -->
+    <WebUISettingsSection />
   </div>
 </template>

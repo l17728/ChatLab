@@ -1012,6 +1012,7 @@ declare global {
     sessionApi: SessionApi
     nlpApi: NlpApi
     apiServerApi: ApiServerApi
+    collabApi: import('./apis/collaboration').CollabApi
   }
 }
 

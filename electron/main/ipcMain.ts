@@ -16,6 +16,8 @@ import { registerNetworkHandlers } from './ipc/network'
 import { registerNlpHandlers } from './ipc/nlp'
 import { registerAnalyticsHandlers } from './analytics'
 import { registerApiHandlers, initApiServer, cleanupApiServer } from './ipc/api'
+import { registerCollaborationHandlers } from './ipc/collaboration'
+import { closeAllGlobalDbs } from './database/global'
 // 导入 Worker 模块（用于异步分析查询和流式导入）
 import * as worker from './worker/workerManager'
 
@@ -50,6 +52,7 @@ const mainIpcMain = (win: BrowserWindow) => {
   registerNlpHandlers(context)
   registerAnalyticsHandlers()
   registerApiHandlers(context)
+  registerCollaborationHandlers(context)
 
   // 启动 ChatLab API 服务（异步，不阻塞 IPC 注册）
   initApiServer(context).catch((err) => {
@@ -64,6 +67,8 @@ export const cleanup = () => {
   try {
     // 关闭 Worker
     worker.closeWorker()
+    // 关闭全局数据库
+    closeAllGlobalDbs()
     // 清理临时数据库
     cleanupTempDbs()
   } catch (error) {
@@ -81,6 +86,8 @@ export const cleanupAsync = async () => {
     await cleanupApiServer()
     // 等待 Worker 完全关闭
     await worker.closeWorkerAsync()
+    // 关闭全局数据库
+    closeAllGlobalDbs()
     // 清理临时数据库
     cleanupTempDbs()
     console.log('[IpcMain] Cleanup completed')

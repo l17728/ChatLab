@@ -8,6 +8,11 @@ import type { MemberActivity, HourlyActivity, DailyActivity } from '@/types/anal
 import CaptureButton from '@/components/common/CaptureButton.vue'
 import TimeSelect from '@/components/common/TimeSelect.vue'
 import AITab from '@/components/analysis/AITab.vue'
+import TaskTab from '@/components/analysis/TaskTab.vue'
+import TodoTab from '@/components/analysis/TodoTab.vue'
+import KnowledgeTab from '@/components/analysis/KnowledgeTab.vue'
+import FocusTab from '@/components/analysis/FocusTab.vue'
+import GraphTab from '@/components/analysis/GraphTab.vue'
 import { ChatExplorer } from '@/components/AIChat'
 import OverviewTab from './components/OverviewTab.vue'
 import ViewTab from './components/ViewTab.vue'
@@ -62,6 +67,11 @@ const allTabs = [
   { id: 'view', labelKey: 'analysis.tabs.view', icon: 'i-heroicons-presentation-chart-bar' },
   { id: 'quotes', labelKey: 'analysis.tabs.groupQuotes', icon: 'i-heroicons-chat-bubble-bottom-center-text' },
   { id: 'members', labelKey: 'analysis.tabs.members', icon: 'i-heroicons-user-group' },
+  { id: 'tasks', labelKey: 'analysis.tabs.tasks', icon: 'i-heroicons-clipboard-document-check' },
+  { id: 'todos', labelKey: 'analysis.tabs.todos', icon: 'i-heroicons-check-circle' },
+  { id: 'knowledge', labelKey: 'analysis.tabs.knowledge', icon: 'i-heroicons-book-open' },
+  { id: 'focus', labelKey: 'analysis.tabs.focus', icon: 'i-heroicons-eye' },
+  { id: 'graph', labelKey: 'analysis.tabs.graph', icon: 'i-heroicons-share' },
   { id: 'ai-chat', labelKey: 'analysis.tabs.aiChat', icon: 'i-heroicons-chat-bubble-left-ellipsis' },
   { id: 'lab', labelKey: 'analysis.tabs.lab', icon: 'i-heroicons-beaker' },
 ]
@@ -295,7 +305,7 @@ onMounted(() => {
           <TimeSelect
             v-model="timeRangeValue"
             :session-id="currentSessionId ?? undefined"
-            :visible="activeTab !== 'ai-chat' && activeTab !== 'lab' && activeTab !== 'members'"
+            :visible="activeTab !== 'ai-chat' && activeTab !== 'lab' && activeTab !== 'members' && activeTab !== 'tasks' && activeTab !== 'todos' && activeTab !== 'knowledge' && activeTab !== 'focus' && activeTab !== 'graph'"
             :initial-state="initialTimeState"
             @update:full-range="fullTimeRange = $event"
             @update:available-years="availableYears = $event"
@@ -347,6 +357,28 @@ onMounted(() => {
               :session-id="currentSessionId!"
               :time-filter="timeFilter"
               @data-changed="loadData"
+            />
+            <TaskTab
+              v-else-if="activeTab === 'tasks'"
+              :key="'tasks-' + currentSessionId"
+              :session-id="currentSessionId!"
+            />
+            <TodoTab
+              v-else-if="activeTab === 'todos'"
+              :key="'todos-' + currentSessionId"
+              :session-id="currentSessionId!"
+            />
+            <KnowledgeTab
+              v-else-if="activeTab === 'knowledge'"
+              key="knowledge"
+            />
+            <FocusTab
+              v-else-if="activeTab === 'focus'"
+              key="focus"
+            />
+            <GraphTab
+              v-else-if="activeTab === 'graph'"
+              key="graph"
             />
             <ChatExplorer
               v-else-if="activeTab === 'ai-chat'"

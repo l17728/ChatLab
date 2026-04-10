@@ -7,7 +7,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import * as userDb from './user-db'
-import { unauthorized, errorResponse, ApiError, successResponse, invalidFormat } from '../errors'
 
 // ==================== Types ====================
 
@@ -305,7 +304,7 @@ export function verifyToken(token: string): { valid: boolean; userId?: string; u
  */
 export async function jwtAuthMiddleware(
   request: FastifyRequest,
-  reply: FastifyReply
+  _reply: FastifyReply
 ): Promise<{ valid: boolean; userId?: string; username?: string; error?: string }> {
   const authHeader = request.headers.authorization
 
