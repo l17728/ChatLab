@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useFocusStore } from '@/stores/focus'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
@@ -7,6 +8,14 @@ import type { FocusItem } from '@/electron/main/services/focusService'
 
 const focusStore = useFocusStore()
 const { filteredItems, loading, statistics, selectedType } = storeToRefs(focusStore)
+
+// 虚拟列表 (性能优化)
+const FOCUS_ITEM_HEIGHT = 110
+const VIRTUAL_CONTAINER_HEIGHT = 580
+const { list: virtualItems, containerProps, wrapperProps } = useVirtualList(filteredItems, {
+  itemHeight: FOCUS_ITEM_HEIGHT,
+  overscan: 5,
+})
 
 // 创建对话框
 const showCreateDialog = ref(false)
@@ -161,9 +170,14 @@ function closeActivity() {
         <p class="text-xs">添加您关注的话题、人物或关键词，AI 将持续追踪相关动态</p>
       </div>
 
-      <ul v-else class="divide-y divide-gray-100 dark:divide-gray-800">
+      <div
+        v-else
+        v-bind="containerProps"
+        :style="{ height: `${VIRTUAL_CONTAINER_HEIGHT}px`, overflowY: 'auto' }"
+      >
+        <ul v-bind="wrapperProps" class="divide-y divide-gray-100 dark:divide-gray-800">
         <li
-          v-for="item in filteredItems"
+          v-for="{ data: item } in virtualItems"
           :key="item.id"
           class="group flex items-start gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
           data-testid="focus-item"
@@ -231,7 +245,8 @@ function closeActivity() {
             </button>
           </div>
         </li>
-      </ul>
+        </ul>
+      </div>
     </div>
 
     <!-- 创建关注点对话框 -->

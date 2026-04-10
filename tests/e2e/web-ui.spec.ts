@@ -46,7 +46,7 @@ const WEB_UI_PORT   = 9871   // API server 默认端口（可通过环境变量�
 const API_BASE      = `http://127.0.0.1:${WEB_UI_PORT}`
 
 /** 等待 API server 就绪（轮询 /api/status） */
-async function waitForApiServer(timeoutMs = 15_000): Promise<void> {
+async function waitForApiServer(timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
@@ -105,8 +105,8 @@ interface AppHandle {
 
 async function startIsolatedApp(): Promise<AppHandle> {
   // 启动独立 Electron 实例（随机 CDP 端口 + 随机 userData）
-  const app = await launchApp({ startupWaitTime: 4000 })
-  await waitForApiServer()
+  const app = await launchApp({ startupWaitTime: 8000 })
+  await waitForApiServer(30_000)
   const { browser, ctx, page } = await connectElectronPage(app.port)
   return { app, browser, ctx, page }
 }
@@ -126,6 +126,7 @@ test.describe('WUI 服务控制', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000) // allow enough time to launch Electron + wait for API server
     handle = await startIsolatedApp()
   })
   test.afterAll(async () => {
@@ -187,6 +188,7 @@ test.describe('WUI 登录认证', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000) // allow enough time to launch Electron + wait for API server
     handle = await startIsolatedApp()
   })
   test.afterAll(async () => {
@@ -291,6 +293,7 @@ test.describe('WUI 登录限速', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000) // allow enough time to launch Electron + wait for API server
     handle = await startIsolatedApp()
   })
   test.afterAll(async () => {
@@ -340,6 +343,7 @@ test.describe('WUI 用户注册与密码管理', () => {
   const newUser = { username: `e2euser_${Date.now()}`, password: 'Pass@1234' }
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000)
     handle = await startIsolatedApp()
     adminToken = await apiLogin(DEFAULT_ADMIN.username, DEFAULT_ADMIN.password)
   })
@@ -411,6 +415,7 @@ test.describe('WUI 退出登录', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000) // allow enough time to launch Electron + wait for API server
     handle = await startIsolatedApp()
   })
   test.afterAll(async () => {
@@ -453,6 +458,7 @@ test.describe('WUI 会话与对话管理', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000)
     handle = await startIsolatedApp()
     // 先登录
     await uiLogin(handle.page)
@@ -534,6 +540,7 @@ test.describe('WUI Admin 用户管理', () => {
   const testUser = { username: `e2e_managed_${Date.now()}`, password: 'Manage@1234' }
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000)
     handle = await startIsolatedApp()
     adminToken = await apiLogin(DEFAULT_ADMIN.username, DEFAULT_ADMIN.password)
     // 创建被管理用户
@@ -693,6 +700,7 @@ test.describe('WUI 权限控制', () => {
   let handle: AppHandle
 
   test.beforeAll(async () => {
+    test.setTimeout(90_000) // allow enough time to launch Electron + wait for API server
     handle = await startIsolatedApp()
   })
   test.afterAll(async () => {

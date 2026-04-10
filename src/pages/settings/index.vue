@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '@/components/layout/PageHeader.vue'
@@ -9,6 +9,7 @@ import BatchManageTab from './components/BatchManageTab.vue'
 import StorageTab from './components/StorageTab.vue'
 import AboutTab from './components/AboutTab.vue'
 import ApiSettingsTab from './components/ApiSettingsTab.vue'
+import IdentityTab from './components/IdentityTab.vue'
 import { usePromptStore } from '@/stores/prompt'
 
 const { t } = useI18n()
@@ -27,6 +28,7 @@ const tabs = computed(() => [
   { id: 'data', label: t('settings.tabs.dataManage'), icon: 'i-heroicons-rectangle-stack' },
   { id: 'storage', label: t('settings.tabs.storage'), icon: 'i-heroicons-folder-open' },
   { id: 'api', label: t('settings.tabs.api'), icon: 'i-heroicons-server-stack' },
+  { id: 'identity', label: t('settings.tabs.identity'), icon: 'i-heroicons-user-circle' },
   { id: 'about', label: t('settings.tabs.about'), icon: 'i-heroicons-information-circle' },
 ])
 
@@ -59,6 +61,16 @@ function scrollToSubTab(subTab: string) {
   }
 }
 
+function handleOpenSettings(e: Event) {
+  const tab = (e as CustomEvent).detail?.tab
+  if (!tab) return
+  if (route.path !== '/settings') {
+    router.push({ path: '/settings', query: { tab } })
+  } else {
+    switchTab(tab)
+  }
+}
+
 watch(
   () => route.query,
   async (query) => {
@@ -75,12 +87,17 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('open-settings', handleOpenSettings)
   const subTab = route.query.subTab as string
   if (subTab) {
     await nextTick()
     setTimeout(() => scrollToSubTab(subTab), 100)
   }
   tabRefs.value[activeTab.value]?.refresh?.()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('open-settings', handleOpenSettings)
 })
 </script>
 
@@ -122,6 +139,11 @@ onMounted(async () => {
           <BatchManageTab v-else-if="activeTab === 'data'" key="data" />
           <StorageTab v-else-if="activeTab === 'storage'" key="storage" :ref="(el) => setTabRef('storage', el)" />
           <ApiSettingsTab v-else-if="activeTab === 'api'" key="api" />
+          <IdentityTab
+            v-else-if="activeTab === 'identity'"
+            key="identity"
+            :ref="(el) => setTabRef('identity', el)"
+          />
           <AboutTab v-else-if="activeTab === 'about'" key="about" />
         </Transition>
       </div>

@@ -6,6 +6,7 @@
  * 日志前缀: [TodoTab]
  */
 import { ref, computed, onMounted } from 'vue'
+import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useTodoStore } from '@/stores/todo'
 import { useSettingsStore } from '@/stores/settings'
@@ -16,6 +17,14 @@ const props = defineProps<{ sessionId?: string }>()
 const todoStore = useTodoStore()
 const settingsStore = useSettingsStore()
 const { filteredTodos, loading, statistics, filter } = storeToRefs(todoStore)
+
+// 虚拟列表 (性能优化)
+const TODO_ITEM_HEIGHT = 100
+const VIRTUAL_CONTAINER_HEIGHT = 600
+const { list: virtualTodos, containerProps, wrapperProps } = useVirtualList(filteredTodos, {
+  itemHeight: TODO_ITEM_HEIGHT,
+  overscan: 5,
+})
 
 // 身份配置
 const identityConfig = computed(() => settingsStore.identityConfig)
@@ -391,10 +400,16 @@ async function saveEditTodo() {
         <p class="text-xs">AI 会自动同步分配给您的任务，或手动创建新待办</p>
       </div>
 
-      <!-- 待办卡片列表 -->
-      <ul v-else class="divide-y divide-gray-100 dark:divide-gray-800" data-testid="todo-list">
+      <!-- 待办卡片列表 (虚拟滚动) -->
+      <div
+        v-else
+        v-bind="containerProps"
+        :style="{ height: `${VIRTUAL_CONTAINER_HEIGHT}px`, overflowY: 'auto' }"
+        data-testid="todo-list"
+      >
+        <ul v-bind="wrapperProps" class="divide-y divide-gray-100 dark:divide-gray-800">
         <li
-          v-for="todo in filteredTodos"
+          v-for="{ data: todo } in virtualTodos"
           :key="todo.id"
           class="group px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
           data-testid="todo-item"
@@ -523,7 +538,8 @@ async function saveEditTodo() {
             </div>
           </div>
         </li>
-      </ul>
+        </ul>
+      </div>
     </div>
 
     <!-- 新建待办对话框 -->
