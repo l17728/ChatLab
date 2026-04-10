@@ -2,10 +2,11 @@
  * ChatLab API — Session and export routes
  */
 
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as worker from '../../worker/workerManager'
 import * as assistantManager from '../../ai/assistant'
 import { successResponse, sessionNotFound, exportTooLarge, sqlExecutionError, ApiError, errorResponse } from '../errors'
+import { verifyToken } from '../auth-db'
 
 const EXPORT_MESSAGE_LIMIT = 100_000
 
@@ -15,7 +16,43 @@ async function ensureSession(sessionId: string) {
   return session
 }
 
+/**
+ * Verify JWT token from Authorization header.
+ * Local IP (Electron desktop) is allowed without token.
+ * Non-local requests (Web UI browser) must provide a valid token.
+ */
+async function smartAuth(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  const authHeader = request.headers.authorization
+  const remoteIp = request.ip
+  const isLocal =
+    remoteIp === '127.0.0.1' ||
+    remoteIp === '::1' ||
+    remoteIp === '::ffff:127.0.0.1'
+
+  if (!authHeader) {
+    if (isLocal) return true // Electron desktop — no token needed
+    reply.code(401).send(errorResponse(new ApiError('UNAUTHORIZED' as any, 'Authentication required')))
+    return false
+  }
+
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader
+  const result = await verifyToken(token)
+  if (!result.valid) {
+    reply.code(401).send(errorResponse(new ApiError('UNAUTHORIZED' as any, 'Invalid or expired token')))
+    return false
+  }
+  return true
+}
+
 export function registerSessionRoutes(server: FastifyInstance): void {
+  // Apply smart auth to all /api/v1/* routes:
+  // local IP (Electron) allowed without token; non-local must provide valid JWT
+  server.addHook('preHandler', async (request, reply) => {
+    if (request.url.startsWith('/api/v1/')) {
+      await smartAuth(request, reply)
+    }
+  })
+
   // GET /api/v1/sessions — List all sessions
   server.get('/api/v1/sessions', async () => {
     const sessions = await worker.getAllSessions()
