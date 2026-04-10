@@ -146,7 +146,7 @@ export class FocusService {
   /**
    * 增加提及计数（原子事务）
    */
-  incrementMentionCount(id: number, sessionId: string): void {
+  incrementMentionCount(id: number, _sessionId: string): void {
     const now = Date.now()
     this.db.transaction(() => {
       this.db.prepare(`
@@ -164,6 +164,7 @@ export class FocusService {
 
       this.db.prepare('UPDATE focus_item SET related_session_count = ? WHERE id = ?').run(sessionCount, id)
     })()
+  }
 
   private mapRow(row: any): FocusItem {
     return {
