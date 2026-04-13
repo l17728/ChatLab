@@ -340,7 +340,7 @@
 // }
 //
 // .dashboard.desktop-layout {
-//  /* Native window frame for Electron 
+//  /* Native window frame for Electron
 //   border-radius: 0;
 // }
 
@@ -354,7 +354,7 @@
 // }
 
 // .menu.native-menu {
-  // Native menu styling for Electron 
+// Native menu styling for Electron
 //   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 // }
 

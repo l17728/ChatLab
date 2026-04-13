@@ -24,10 +24,7 @@ async function ensureSession(sessionId: string) {
 async function smartAuth(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   const authHeader = request.headers.authorization
   const remoteIp = request.ip
-  const isLocal =
-    remoteIp === '127.0.0.1' ||
-    remoteIp === '::1' ||
-    remoteIp === '::ffff:127.0.0.1'
+  const isLocal = remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1'
 
   if (!authHeader) {
     if (isLocal) return true // Electron desktop — no token needed
@@ -49,7 +46,8 @@ export function registerSessionRoutes(server: FastifyInstance): void {
   // local IP (Electron) allowed without token; non-local must provide valid JWT
   server.addHook('preHandler', async (request, reply) => {
     if (request.url.startsWith('/api/v1/')) {
-      await smartAuth(request, reply)
+      const ok = await smartAuth(request, reply)
+      if (!ok) return // stop further processing — smartAuth already sent 401
     }
   })
 
@@ -57,6 +55,16 @@ export function registerSessionRoutes(server: FastifyInstance): void {
   server.get('/api/v1/sessions', async () => {
     const sessions = await worker.getAllSessions()
     return successResponse(sessions)
+  })
+
+  // DELETE /api/v1/sessions/:id — Delete a session and its database
+  server.delete<{ Params: { id: string } }>('/api/v1/sessions/:id', async (request, reply) => {
+    await ensureSession(request.params.id)
+    const deleted = await worker.deleteSession(request.params.id)
+    if (!deleted) {
+      return reply.code(500).send(errorResponse(new ApiError('SERVER_ERROR' as any, 'Failed to delete session')))
+    }
+    return successResponse({ deleted: true })
   })
 
   // GET /api/v1/sessions/:id — Single session detail
@@ -147,32 +155,36 @@ export function registerSessionRoutes(server: FastifyInstance): void {
 
   // POST /api/v1/sessions/:id/sql — Execute SQL (read-only)
   // Supports optional params array for parameterized queries (pluginQuery compatibility)
-  server.post<{ Params: { id: string }; Body: { sql: string; params?: any[] } }>('/api/v1/sessions/:id/sql', async (request, reply) => {
-    const { id } = request.params
-    await ensureSession(id)
+  server.post<{ Params: { id: string }; Body: { sql: string; params?: any[] } }>(
+    '/api/v1/sessions/:id/sql',
+    async (request, reply) => {
+      const { id } = request.params
+      await ensureSession(id)
 
-    const { sql, params } = request.body || {}
-    if (!sql || typeof sql !== 'string') {
-      const err = sqlExecutionError('Missing sql parameter')
-      return reply.code(err.statusCode).send(errorResponse(err))
-    }
-
-    try {
-      // pluginQuery 始终返回行数组（无论是否有参数），与 Worker IPC 保持一致
-      const safeParams = params && Array.isArray(params) ? params : []
-      const result = await worker.pluginQuery(id, sql, safeParams)
-      return successResponse(result)
-    } catch (err: any) {
-      const message = err.message || 'SQL execution error'
-      if (message.includes('SELECT') || message.includes('只读') || message.includes('readonly')) {
-        const apiErr = new ApiError('SQL_READONLY_VIOLATION' as any, message)
-        apiErr.statusCode = 400
-        return reply.code(400).send(errorResponse(apiErr))
+      const { sql, params } = request.body || {}
+      if (!sql || typeof sql !== 'string') {
+        const err = sqlExecutionError('Missing sql parameter')
+        return reply.code(err.statusCode).send(errorResponse(err))
       }
-      const apiErr = sqlExecutionError(message)
-      return reply.code(apiErr.statusCode).send(errorResponse(apiErr))
+
+      try {
+        // pluginQuery 始终返回行数组（无论是否有参数），与 Worker IPC 保持一致
+        const safeParams = params && Array.isArray(params) ? params : []
+        const result = await worker.pluginQuery(id, sql, safeParams)
+        return successResponse(result)
+      } catch (err: any) {
+        const message = err.message || 'SQL execution error'
+        console.error('[API] pluginQuery error:', message)
+        if (message.includes('SELECT') || message.includes('只读') || message.includes('readonly')) {
+          const apiErr = new ApiError('SQL_READONLY_VIOLATION' as any, 'Only SELECT statements are allowed')
+          apiErr.statusCode = 400
+          return reply.code(400).send(errorResponse(apiErr))
+        }
+        const apiErr = sqlExecutionError('SQL execution failed')
+        return reply.code(apiErr.statusCode).send(errorResponse(apiErr))
+      }
     }
-  })
+  )
 
   // GET /api/v1/sessions/:id/export — Export ChatLab Format JSON
   server.get<{ Params: { id: string } }>('/api/v1/sessions/:id/export', async (request, reply) => {
@@ -457,11 +469,7 @@ export function registerSessionRoutes(server: FastifyInstance): void {
     if (q.startTime) filter.startTs = parseInt(q.startTime, 10)
     if (q.endTime) filter.endTs = parseInt(q.endTime, 10)
     const limit = q.limit ? parseInt(q.limit, 10) : 100
-    const data = await worker.getAllRecentMessages(
-      id,
-      Object.keys(filter).length > 0 ? filter : undefined,
-      limit
-    )
+    const data = await worker.getAllRecentMessages(id, Object.keys(filter).length > 0 ? filter : undefined, limit)
     return successResponse(data)
   })
 
@@ -516,7 +524,8 @@ export function registerSessionRoutes(server: FastifyInstance): void {
         const result = await worker.executeRawSQL(id, sql)
         return successResponse(result)
       } catch (err: any) {
-        const apiErr = sqlExecutionError(err.message || 'SQL execution error')
+        console.error('[API] executeRawSQL error:', err.message)
+        const apiErr = sqlExecutionError('SQL execution failed')
         return reply.code(apiErr.statusCode).send(errorResponse(apiErr))
       }
     }
@@ -537,7 +546,8 @@ export function registerSessionRoutes(server: FastifyInstance): void {
         const result = await worker.executeRawSQL(id, sql)
         return successResponse(result)
       } catch (err: any) {
-        const apiErr = sqlExecutionError(err.message || 'SQL execution error')
+        console.error('[API] executeRawSQL error:', err.message)
+        const apiErr = sqlExecutionError('SQL execution failed')
         return reply.code(apiErr.statusCode).send(errorResponse(apiErr))
       }
     }
@@ -561,34 +571,39 @@ export function registerSessionRoutes(server: FastifyInstance): void {
   })
 
   // GET /api/v1/ai/conversations/:conversationId — Get single AI conversation
-  server.get<{ Params: { conversationId: string } }>(
-    '/api/v1/ai/conversations/:conversationId',
-    async (request) => {
-      const aiConversations = await import('../../ai/conversations')
-      const data = aiConversations.getConversation(request.params.conversationId)
-      return successResponse(data)
-    }
-  )
+  server.get<{ Params: { conversationId: string } }>('/api/v1/ai/conversations/:conversationId', async (request) => {
+    const aiConversations = await import('../../ai/conversations')
+    const data = aiConversations.getConversation(request.params.conversationId)
+    return successResponse(data)
+  })
 
   // PATCH /api/v1/ai/conversations/:conversationId/title — Update conversation title
   server.patch<{ Params: { conversationId: string }; Body: { title: string } }>(
     '/api/v1/ai/conversations/:conversationId/title',
-    async (request) => {
+    async (request, reply) => {
+      const { title } = request.body
+      if (typeof title !== 'string' || !title.trim()) {
+        return reply
+          .code(400)
+          .send(errorResponse(new ApiError('INVALID_FORMAT' as any, 'title must be a non-empty string')))
+      }
+      if (title.length > 500) {
+        return reply
+          .code(400)
+          .send(errorResponse(new ApiError('INVALID_FORMAT' as any, 'title exceeds maximum length of 500')))
+      }
       const aiConversations = await import('../../ai/conversations')
-      const data = aiConversations.updateConversationTitle(request.params.conversationId, request.body.title)
+      const data = aiConversations.updateConversationTitle(request.params.conversationId, title)
       return successResponse(data)
     }
   )
 
   // DELETE /api/v1/ai/conversations/:conversationId — Delete AI conversation
-  server.delete<{ Params: { conversationId: string } }>(
-    '/api/v1/ai/conversations/:conversationId',
-    async (request) => {
-      const aiConversations = await import('../../ai/conversations')
-      const data = aiConversations.deleteConversation(request.params.conversationId)
-      return successResponse(data)
-    }
-  )
+  server.delete<{ Params: { conversationId: string } }>('/api/v1/ai/conversations/:conversationId', async (request) => {
+    const aiConversations = await import('../../ai/conversations')
+    const data = aiConversations.deleteConversation(request.params.conversationId)
+    return successResponse(data)
+  })
 
   // GET /api/v1/ai/conversations/:conversationId/messages — Get AI conversation messages
   server.get<{ Params: { conversationId: string } }>(

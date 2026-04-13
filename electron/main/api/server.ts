@@ -3,7 +3,6 @@
  */
 
 import Fastify, { type FastifyInstance, type FastifyError } from 'fastify'
-import { authHook } from './auth'
 import { ApiError, ApiErrorCode, errorResponse, serverError } from './errors'
 
 const JSON_BODY_LIMIT = 50 * 1024 * 1024 // 50MB
@@ -13,8 +12,6 @@ export function createServer(): FastifyInstance {
     logger: false,
     bodyLimit: JSON_BODY_LIMIT,
   })
-
-  server.addHook('onRequest', authHook)
 
   server.setErrorHandler((error: FastifyError, _request, reply) => {
     if (error instanceof ApiError) {
@@ -29,7 +26,7 @@ export function createServer(): FastifyInstance {
     }
 
     console.error('[ChatLab API] Unhandled error:', error)
-    const err = serverError(error.message)
+    const err = serverError('An internal server error occurred')
     reply.code(err.statusCode).send(errorResponse(err))
   })
 

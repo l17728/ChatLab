@@ -22,27 +22,27 @@ async function run() {
   const browser = await chromium.launch({
     headless: false,
     slowMo: 500,
-    args: ['--start-maximized']
+    args: ['--start-maximized'],
   })
 
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 }
+    viewport: { width: 1280, height: 800 },
   })
   const page = await context.newPage()
 
   // 收集所有 console 输出
   const logs = []
-  page.on('console', msg => {
+  page.on('console', (msg) => {
     const text = `[${msg.type().toUpperCase()}] ${msg.text()}`
     logs.push(text)
     console.log(text)
   })
-  page.on('pageerror', err => {
+  page.on('pageerror', (err) => {
     const text = `[PAGE ERROR] ${err.message}`
     logs.push(text)
     console.error(text)
   })
-  page.on('requestfailed', req => {
+  page.on('requestfailed', (req) => {
     const text = `[REQUEST FAILED] ${req.method()} ${req.url()} — ${req.failure()?.errorText}`
     logs.push(text)
     console.warn(text)
@@ -78,7 +78,10 @@ async function run() {
   console.log('Login page body text:', loginText)
 
   // 检查 DOM 结构
-  const appEl = await page.locator('#app').innerHTML().catch(() => 'not found')
+  const appEl = await page
+    .locator('#app')
+    .innerHTML()
+    .catch(() => 'not found')
   console.log('App innerHTML (first 800):', appEl.slice(0, 800))
 
   // 查找登录相关元素
@@ -137,7 +140,7 @@ async function run() {
       const res = await fetch('/api/webui/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'admin', password: 'admin123' })
+        body: JSON.stringify({ username: 'admin', password: 'admin123' }),
       })
       const body = await res.json()
       return { status: res.status, body }
@@ -158,7 +161,7 @@ async function run() {
   await browser.close()
 }
 
-run().catch(err => {
+run().catch((err) => {
   console.error('Script error:', err)
   process.exit(1)
 })

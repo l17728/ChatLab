@@ -6,6 +6,15 @@
 import type Database from 'better-sqlite3'
 import { getGlobalDb } from '../database/global/index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export interface FocusItem {
   id: number
   globalUserId: string
@@ -39,9 +48,27 @@ export class FocusService {
   }
 
   /**
+   * 按 (globalUserId, type, 归一化标题) 查找已存在关注点，跨批次去重。
+   */
+  findIdByNormalizedTitle(globalUserId: string, type: string, title: string): number | null {
+    const normalized = title.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (!normalized) return null
+    const row = this.db
+      .prepare(
+        `SELECT id FROM focus_item
+         WHERE global_user_id = ? AND type = ? AND LOWER(TRIM(title)) = ?
+         LIMIT 1`
+      )
+      .get(globalUserId, type, normalized) as { id: number } | undefined
+    return row?.id ?? null
+  }
+
+  /**
    * 创建关注点
    */
-  createFocusItem(item: Omit<FocusItem, 'id' | 'createdTs' | 'updatedTs' | 'mentionCount' | 'relatedSessionCount'>): number {
+  createFocusItem(
+    item: Omit<FocusItem, 'id' | 'createdTs' | 'updatedTs' | 'mentionCount' | 'relatedSessionCount'>
+  ): number {
     const now = Date.now()
     const stmt = this.db.prepare(`
       INSERT INTO focus_item (
@@ -59,7 +86,7 @@ export class FocusService {
       JSON.stringify(item.keywords),
       item.color || null,
       item.status,
-      item.lastActivityTs || null,
+      item.lastActivityTs ?? null,
       item.lastSummary || null,
       now,
       now
@@ -76,13 +103,34 @@ export class FocusService {
     const fields: string[] = []
     const values: unknown[] = []
 
-    if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title) }
-    if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description) }
-    if (updates.keywords !== undefined) { fields.push('keywords = ?'); values.push(JSON.stringify(updates.keywords)) }
-    if (updates.color !== undefined) { fields.push('color = ?'); values.push(updates.color) }
-    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status) }
-    if (updates.lastSummary !== undefined) { fields.push('last_summary = ?'); values.push(updates.lastSummary) }
-    if (updates.lastActivityTs !== undefined) { fields.push('last_activity_ts = ?'); values.push(updates.lastActivityTs) }
+    if (updates.title !== undefined) {
+      fields.push('title = ?')
+      values.push(updates.title)
+    }
+    if (updates.description !== undefined) {
+      fields.push('description = ?')
+      values.push(updates.description)
+    }
+    if (updates.keywords !== undefined) {
+      fields.push('keywords = ?')
+      values.push(JSON.stringify(updates.keywords))
+    }
+    if (updates.color !== undefined) {
+      fields.push('color = ?')
+      values.push(updates.color)
+    }
+    if (updates.status !== undefined) {
+      fields.push('status = ?')
+      values.push(updates.status)
+    }
+    if (updates.lastSummary !== undefined) {
+      fields.push('last_summary = ?')
+      values.push(updates.lastSummary)
+    }
+    if (updates.lastActivityTs !== undefined) {
+      fields.push('last_activity_ts = ?')
+      values.push(updates.lastActivityTs)
+    }
 
     if (fields.length === 0) return false
 
@@ -98,7 +146,9 @@ export class FocusService {
    * 删除关注点（软删除）
    */
   archiveFocusItem(id: number): boolean {
-    const result = this.db.prepare(`UPDATE focus_item SET status = 'archived', updated_ts = ? WHERE id = ?`).run(Date.now(), id)
+    const result = this.db
+      .prepare(`UPDATE focus_item SET status = 'archived', updated_ts = ? WHERE id = ?`)
+      .run(Date.now(), id)
     return result.changes > 0
   }
 
@@ -149,18 +199,29 @@ export class FocusService {
   incrementMentionCount(id: number, _sessionId: string): void {
     const now = Date.now()
     this.db.transaction(() => {
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         UPDATE focus_item SET
           mention_count = mention_count + 1,
           last_activity_ts = ?,
           updated_ts = ?
         WHERE id = ?
-      `).run(now, now, id)
+      `
+        )
+        .run(now, now, id)
 
       // 计算关联会话数（在同一事务内保证一致性）
-      const sessionCount = (this.db.prepare(`
+      const sessionCount =
+        (
+          this.db
+            .prepare(
+              `
         SELECT COUNT(DISTINCT session_id) as cnt FROM focus_message_link WHERE focus_id = ?
-      `).get(id) as any)?.cnt || 0
+      `
+            )
+            .get(id) as any
+        )?.cnt || 0
 
       this.db.prepare('UPDATE focus_item SET related_session_count = ? WHERE id = ?').run(sessionCount, id)
     })()
@@ -173,12 +234,12 @@ export class FocusService {
       type: row.type,
       title: row.title,
       description: row.description || undefined,
-      keywords: row.keywords ? JSON.parse(row.keywords) : [],
+      keywords: safeJsonParse(row.keywords, []),
       color: row.color || undefined,
       mentionCount: row.mention_count,
       relatedSessionCount: row.related_session_count,
       status: row.status,
-      lastActivityTs: row.last_activity_ts || undefined,
+      lastActivityTs: row.last_activity_ts ?? undefined,
       lastSummary: row.last_summary || undefined,
       createdTs: row.created_ts,
       updatedTs: row.updated_ts,
@@ -188,7 +249,10 @@ export class FocusService {
   /**
    * 获取关注点的动态（跨会话提及记录）
    */
-  getFocusActivity(focusId: number, limit: number = 20): Array<{
+  getFocusActivity(
+    focusId: number,
+    limit: number = 20
+  ): Array<{
     sessionId: string
     messageId: number
     messageTs: number

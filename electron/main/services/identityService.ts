@@ -79,13 +79,7 @@ export class IdentityService {
         .get(member.platformId) as any
 
       if (exactMatch) {
-        return this.createMapping(
-          sessionId,
-          member,
-          exactMatch.global_user_id,
-          'exact',
-          1.0
-        )
+        return this.createMapping(sessionId, member, exactMatch.global_user_id, 'exact', 1.0)
       }
     }
 
@@ -102,10 +96,7 @@ export class IdentityService {
       // 模糊匹配
       if (matchStrategy === 'fuzzy') {
         for (const nickname of globalNicknames) {
-          const similarity = this.calculateNameSimilarity(nickname, [
-            member.groupNickname,
-            member.accountName,
-          ])
+          const similarity = this.calculateNameSimilarity(nickname, [member.groupNickname, member.accountName])
           if (similarity >= 0.85) {
             const globalUserId = this.getOrCreateGlobalUser(nickname)
             return this.createMapping(sessionId, member, globalUserId, 'fuzzy', similarity)
@@ -183,11 +174,7 @@ export class IdentityService {
   /**
    * 手动确认身份（用户在对话框中选择）
    */
-  async confirmIdentity(
-    sessionId: string,
-    memberId: number,
-    displayName: string
-  ): Promise<string> {
+  async confirmIdentity(sessionId: string, memberId: number, displayName: string): Promise<string> {
     const globalUserId = this.getOrCreateGlobalUser(displayName)
 
     // 创建或更新映射
@@ -206,13 +193,7 @@ export class IdentityService {
         )
         .run(globalUserId, sessionId, memberId)
     } else {
-      this.createMapping(
-        sessionId,
-        { id: memberId },
-        globalUserId,
-        'manual',
-        1.0
-      )
+      this.createMapping(sessionId, { id: memberId }, globalUserId, 'manual', 1.0)
     }
 
     return globalUserId
@@ -237,10 +218,7 @@ export class IdentityService {
     const users = this.identityDb.prepare('SELECT global_user_id, display_name FROM global_user').all() as any[]
 
     for (const user of users) {
-      const similarity = this.calculateNameSimilarity(user.display_name, [
-        member.groupNickname,
-        member.accountName,
-      ])
+      const similarity = this.calculateNameSimilarity(user.display_name, [member.groupNickname, member.accountName])
       candidates.push({
         globalUserId: user.global_user_id,
         displayName: user.display_name,
@@ -298,11 +276,26 @@ export class IdentityService {
    */
   private extractPinyinInitials(s: string): string {
     const INITIALS: Array<[number, number, string]> = [
-      [0x4e00, 0x507a, 'b'], [0x507b, 0x5195, 'p'], [0x5196, 0x535e, 'm'], [0x535f, 0x58f5, 'f'],
-      [0x58f6, 0x5e7a, 'd'], [0x5e7b, 0x61b6, 't'], [0x61b7, 0x63f1, 'n'], [0x63f2, 0x6727, 'l'],
-      [0x6728, 0x6bce, 'g'], [0x6bcf, 0x6ed0, 'k'], [0x6ed1, 0x7426, 'h'], [0x7427, 0x7661, 'j'],
-      [0x7662, 0x7a16, 'q'], [0x7a17, 0x7da1, 'x'], [0x7da2, 0x82a5, 'zh'], [0x82a6, 0x8553, 'ch'],
-      [0x8554, 0x8bba, 'sh'], [0x8bbb, 0x8f57, 'r'], [0x8f58, 0x923f, 'z'], [0x9240, 0x9699, 'c'],
+      [0x4e00, 0x507a, 'b'],
+      [0x507b, 0x5195, 'p'],
+      [0x5196, 0x535e, 'm'],
+      [0x535f, 0x58f5, 'f'],
+      [0x58f6, 0x5e7a, 'd'],
+      [0x5e7b, 0x61b6, 't'],
+      [0x61b7, 0x63f1, 'n'],
+      [0x63f2, 0x6727, 'l'],
+      [0x6728, 0x6bce, 'g'],
+      [0x6bcf, 0x6ed0, 'k'],
+      [0x6ed1, 0x7426, 'h'],
+      [0x7427, 0x7661, 'j'],
+      [0x7662, 0x7a16, 'q'],
+      [0x7a17, 0x7da1, 'x'],
+      [0x7da2, 0x82a5, 'zh'],
+      [0x82a6, 0x8553, 'ch'],
+      [0x8554, 0x8bba, 'sh'],
+      [0x8bbb, 0x8f57, 'r'],
+      [0x8f58, 0x923f, 'z'],
+      [0x9240, 0x9699, 'c'],
       [0x969a, 0x9fa4, 's'],
     ]
     let result = ''

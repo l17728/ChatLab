@@ -13,6 +13,7 @@ import { getActiveConfig, buildPiModel } from '../ai/llm'
 import * as assistantManager from '../ai/assistant'
 import type { AssistantConfig } from '../ai/assistant/types'
 import * as skillManager from '../ai/skills'
+import { setGlobalNicknames } from '../identity/cache'
 import {
   completeSimple,
   streamSimple,
@@ -151,8 +152,23 @@ export function registerAIHandlers({ win }: IpcContext): void {
   // ==================== Debug 模式 ====================
 
   ipcMain.on('app:setDebugMode', (_, enabled: boolean) => {
-    setDebugMode(enabled)
-    aiLogger.info('Config', `Debug mode ${enabled ? 'enabled' : 'disabled'}`)
+    try {
+      setDebugMode(enabled)
+      aiLogger.info('Config', `Debug mode ${enabled ? 'enabled' : 'disabled'}`)
+    } catch (error) {
+      console.error('[IPC] app:setDebugMode failed:', error)
+    }
+  })
+
+  // ==================== 身份缓存 ====================
+  // 渲染端在启动及 globalNicknames 变化时 push 到主进程，
+  // 供 import.ts / chat.ts 中导入后自动触发的统一提取调用
+  ipcMain.on('identity:setGlobalNicknames', (_, nicknames: string[]) => {
+    try {
+      setGlobalNicknames(nicknames)
+    } catch (error) {
+      console.error('[IPC] identity:setGlobalNicknames failed:', error)
+    }
   })
 
   // ==================== AI 对话管理 ====================
@@ -168,7 +184,7 @@ export function registerAIHandlers({ win }: IpcContext): void {
         return aiConversations.createConversation(sessionId, title, assistantId)
       } catch (error) {
         console.error('Failed to create AI conversation:', error)
-        throw error
+        return null
       }
     }
   )
@@ -279,7 +295,7 @@ export function registerAIHandlers({ win }: IpcContext): void {
         return aiConversations.addMessage(conversationId, role, content, dataKeywords, dataMessageCount, contentBlocks)
       } catch (error) {
         console.error('Failed to add AI message:', error)
-        throw error
+        return null
       }
     }
   )
@@ -311,11 +327,21 @@ export function registerAIHandlers({ win }: IpcContext): void {
   // ==================== 脱敏规则 ====================
 
   ipcMain.handle('ai:getDefaultDesensitizeRules', (_, locale: string) => {
-    return getDefaultRulesForLocale(locale)
+    try {
+      return getDefaultRulesForLocale(locale)
+    } catch (error) {
+      console.error('[IpcMain] ai:getDefaultDesensitizeRules failed:', error)
+      return []
+    }
   })
 
   ipcMain.handle('ai:mergeDesensitizeRules', (_, existingRules: unknown[], locale: string) => {
-    return mergeRulesForLocale(existingRules as any[], locale)
+    try {
+      return mergeRulesForLocale(existingRules as any[], locale)
+    } catch (error) {
+      console.error('[IpcMain] ai:mergeDesensitizeRules failed:', error)
+      return existingRules
+    }
   })
 
   // ==================== LLM 服务（多配置管理）====================
@@ -324,27 +350,42 @@ export function registerAIHandlers({ win }: IpcContext): void {
    * 获取所有支持的 LLM 提供商
    */
   ipcMain.handle('llm:getProviders', async () => {
-    return llm.PROVIDERS
+    try {
+      return llm.PROVIDERS
+    } catch (error) {
+      console.error('[IpcMain] llm:getProviders failed:', error)
+      return []
+    }
   })
 
   /**
    * 获取所有配置列表
    */
   ipcMain.handle('llm:getAllConfigs', async () => {
-    const configs = llm.getAllConfigs()
-    // 返回 API Key
-    return configs.map((c) => ({
-      ...c,
-      apiKeySet: !!c.apiKey,
-    }))
+    try {
+      const configs = llm.getAllConfigs()
+      // 返回 API Key
+      return configs.map((c) => ({
+        ...c,
+        apiKeySet: !!c.apiKey,
+      }))
+    } catch (error) {
+      console.error('[IpcMain] llm:getAllConfigs failed:', error)
+      return []
+    }
   })
 
   /**
    * 获取当前激活的配置 ID
    */
   ipcMain.handle('llm:getActiveConfigId', async () => {
-    const config = llm.getActiveConfig()
-    return config?.id || null
+    try {
+      const config = llm.getActiveConfig()
+      return config?.id || null
+    } catch (error) {
+      console.error('[IpcMain] llm:getActiveConfigId failed:', error)
+      return null
+    }
   })
 
   /**
@@ -456,12 +497,10 @@ export function registerAIHandlers({ win }: IpcContext): void {
       console.log('[LLM:validateApiKey] Validating:', { provider, baseUrl, model, apiKeyLength: apiKey?.length })
       try {
         const result = await llm.validateApiKey(provider, apiKey, baseUrl, model)
-        console.log('[LLM:validateApiKey] Result:', result)
         return result
       } catch (error) {
         console.error('[LLM:validateApiKey] Validation failed:', error)
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        return { success: false, error: errorMessage }
+        return { success: false, error: 'API key validation failed' }
       }
     }
   )
@@ -470,7 +509,12 @@ export function registerAIHandlers({ win }: IpcContext): void {
    * 检查是否已配置 LLM（是否有激活的配置）
    */
   ipcMain.handle('llm:hasConfig', async () => {
-    return llm.hasActiveConfig()
+    try {
+      return llm.hasActiveConfig()
+    } catch (error) {
+      console.error('[IpcMain] llm:hasConfig failed:', error)
+      return false
+    }
   })
 
   // ==================== LLM 直接调用 API（SQLLab 等非 Agent 场景使用） ====================

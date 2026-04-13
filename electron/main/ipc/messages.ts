@@ -25,7 +25,15 @@ export function registerMessagesHandlers({ win }: IpcContext): void {
       senderId?: number
     ) => {
       try {
-        return await worker.searchMessages(sessionId, keywords, filter, limit, offset, senderId)
+        const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit!)) : undefined
+        const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset!)) : undefined
+        const safeFilter = filter
+          ? {
+              startTs: Number.isFinite(filter.startTs) ? filter.startTs : undefined,
+              endTs: Number.isFinite(filter.endTs) ? filter.endTs : undefined,
+            }
+          : undefined
+        return await worker.searchMessages(sessionId, keywords, safeFilter, safeLimit, safeOffset, senderId)
       } catch (error) {
         console.error('Failed to search messages:', error)
         return { messages: [], total: 0 }
@@ -115,7 +123,8 @@ export function registerMessagesHandlers({ win }: IpcContext): void {
       keywords?: string[]
     ) => {
       try {
-        return await worker.getMessagesBefore(sessionId, beforeId, limit, filter, senderId, keywords)
+        const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit!)) : undefined
+        return await worker.getMessagesBefore(sessionId, beforeId, safeLimit, filter, senderId, keywords)
       } catch (error) {
         console.error('Failed to get previous messages:', error)
         return { messages: [], hasMore: false }
@@ -138,7 +147,8 @@ export function registerMessagesHandlers({ win }: IpcContext): void {
       keywords?: string[]
     ) => {
       try {
-        return await worker.getMessagesAfter(sessionId, afterId, limit, filter, senderId, keywords)
+        const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit!)) : undefined
+        return await worker.getMessagesAfter(sessionId, afterId, safeLimit, filter, senderId, keywords)
       } catch (error) {
         console.error('Failed to get next messages:', error)
         return { messages: [], hasMore: false }
@@ -164,14 +174,17 @@ export function registerMessagesHandlers({ win }: IpcContext): void {
       pageSize?: number
     ) => {
       try {
+        const safeContextSize = Number.isFinite(contextSize) ? Math.max(0, Math.floor(contextSize!)) : undefined
+        const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page!)) : undefined
+        const safePageSize = Number.isFinite(pageSize) ? Math.max(1, Math.floor(pageSize!)) : undefined
         return await worker.filterMessagesWithContext(
           sessionId,
           keywords,
           timeFilter,
           senderIds,
-          contextSize,
-          page,
-          pageSize
+          safeContextSize,
+          safePage,
+          safePageSize
         )
       } catch (error) {
         console.error('Failed to filter messages:', error)
@@ -191,7 +204,9 @@ export function registerMessagesHandlers({ win }: IpcContext): void {
     'ai:getMultipleSessionsMessages',
     async (_, sessionId: string, chatSessionIds: number[], page?: number, pageSize?: number) => {
       try {
-        return await worker.getMultipleSessionsMessages(sessionId, chatSessionIds, page, pageSize)
+        const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page!)) : undefined
+        const safePageSize = Number.isFinite(pageSize) ? Math.max(1, Math.floor(pageSize!)) : undefined
+        return await worker.getMultipleSessionsMessages(sessionId, chatSessionIds, safePage, safePageSize)
       } catch (error) {
         console.error('Failed to get multi-session messages:', error)
         return {

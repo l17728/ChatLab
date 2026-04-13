@@ -73,10 +73,7 @@ export function useElectronMode(): boolean {
  * Create a new API client instance (without caching)
  * Mainly for testing or advanced use cases
  */
-export function createApiClient(options?: {
-  baseURL?: string
-  forceHttp?: boolean
-}): IApiClient {
+export function createApiClient(options?: { baseURL?: string; forceHttp?: boolean }): IApiClient {
   const isElectron = !options?.forceHttp && isElectronEnvironment()
 
   if (isElectron) {

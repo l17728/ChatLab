@@ -8,9 +8,9 @@ import type {
   AuthCredentials,
   AuthResponse,
   LogoutResponse,
-  AnalysisSession,
   ListSessionsResponse,
   GetSessionResponse,
+  DeleteSessionResponse,
   CreateConversationRequest,
   CreateConversationResponse,
   ListConversationsResponse,
@@ -85,16 +85,32 @@ export class HttpClient implements IApiClient {
    */
   async login(credentials: AuthCredentials): Promise<AuthResponse> {
     try {
-      const response = await this.request<AuthResponse>('POST', '/auth/login', {
+      // The API wraps response in { success, data: { token, ... }, meta: {...} }
+      const response = await this.request<any>('POST', '/auth/login', {
         username: credentials.username,
         password: credentials.password,
       })
 
-      if (response && response.success && response.token && response.expiresAt) {
-        this.setToken(response.token, response.expiresAt)
+      if (!response) {
+        return { success: false, error: 'Unknown error' }
       }
 
-      return response || { success: false, error: 'Unknown error' }
+      // Extract token from data wrapper (successResponse nests payload under .data)
+      const token = response.data?.token ?? response.token
+      const expiresAt = response.data?.expiresAt ?? response.expiresAt
+      const userId = response.data?.userId ?? response.userId
+
+      if (response.success && token && expiresAt) {
+        this.setToken(token, expiresAt)
+      }
+
+      return {
+        success: response.success,
+        token,
+        expiresAt,
+        userId,
+        error: response.error?.message ?? response.error,
+      }
     } catch (error) {
       return {
         success: false,
@@ -148,9 +164,9 @@ export class HttpClient implements IApiClient {
   setToken(token: string, expiresAt: number): void {
     this.token = token
     this.tokenExpiresAt = expiresAt
-    // Persist to localStorage for persistence across page reloads
-    localStorage.setItem('chatlab_token', token)
-    localStorage.setItem('chatlab_token_expires_at', String(expiresAt))
+    // Use sessionStorage (tab-scoped) instead of localStorage to limit XSS token theft window
+    sessionStorage.setItem('chatlab_token', token)
+    sessionStorage.setItem('chatlab_token_expires_at', String(expiresAt))
   }
 
   /**
@@ -159,16 +175,16 @@ export class HttpClient implements IApiClient {
   clearToken(): void {
     this.token = null
     this.tokenExpiresAt = 0
-    localStorage.removeItem('chatlab_token')
-    localStorage.removeItem('chatlab_token_expires_at')
+    sessionStorage.removeItem('chatlab_token')
+    sessionStorage.removeItem('chatlab_token_expires_at')
   }
 
   /**
-   * Restore token from localStorage
+   * Restore token from sessionStorage
    */
   restoreToken(): void {
-    const token = localStorage.getItem('chatlab_token')
-    const expiresAt = localStorage.getItem('chatlab_token_expires_at')
+    const token = sessionStorage.getItem('chatlab_token')
+    const expiresAt = sessionStorage.getItem('chatlab_token_expires_at')
 
     if (token && expiresAt) {
       const expiresAtNum = parseInt(expiresAt, 10)
@@ -207,6 +223,21 @@ export class HttpClient implements IApiClient {
       return {
         success: false,
         error: `Failed to get session: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
+
+  /**
+   * Delete an analysis session
+   */
+  async deleteSession(sessionId: string): Promise<DeleteSessionResponse> {
+    try {
+      const response = await this.request<DeleteSessionResponse>('DELETE', `/sessions/${sessionId}`)
+      return response || { success: false, error: 'Unknown error' }
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
       }
     }
   }
@@ -315,5 +346,47 @@ export class HttpClient implements IApiClient {
    */
   isElectron(): boolean {
     return false
+  }
+
+  // ==================== Admin API ====================
+
+  async adminGetServerStatus(): Promise<any> {
+    return this.request<any>('GET', '/admin/server/status')
+  }
+
+  async adminEnableServer(): Promise<any> {
+    return this.request<any>('POST', '/admin/server/enable')
+  }
+
+  async adminDisableServer(): Promise<any> {
+    return this.request<any>('POST', '/admin/server/disable')
+  }
+
+  async adminChangePort(port: number): Promise<any> {
+    return this.request<any>('POST', '/admin/server/port', { port })
+  }
+
+  async adminListUsers(): Promise<any> {
+    return this.request<any>('GET', '/admin/users')
+  }
+
+  async adminDisableUser(username: string): Promise<any> {
+    return this.request<any>('POST', '/admin/users/disable', { username })
+  }
+
+  async adminEnableUser(username: string): Promise<any> {
+    return this.request<any>('POST', '/admin/users/enable', { username })
+  }
+
+  async adminDeleteUser(username: string): Promise<any> {
+    return this.request<any>('POST', '/admin/users/delete', { username })
+  }
+
+  async adminResetPassword(username: string, newPassword: string): Promise<any> {
+    return this.request<any>('POST', '/admin/users/reset-password', { username, newPassword })
+  }
+
+  async adminGetStatistics(): Promise<any> {
+    return this.request<any>('GET', '/admin/statistics')
   }
 }

@@ -7,6 +7,15 @@ import Database from 'better-sqlite3'
 import * as path from 'path'
 import { getAiDataDir, ensureDir } from '../paths'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 const DEFAULT_GENERAL_ID = 'general_cn'
 
 // AI 数据库实例
@@ -364,9 +373,9 @@ export function getMessages(conversationId: string): AIMessage[] {
     role: row.role as 'user' | 'assistant',
     content: row.content,
     timestamp: row.timestamp,
-    dataKeywords: row.dataKeywords ? JSON.parse(row.dataKeywords) : undefined,
+    dataKeywords: row.dataKeywords ? safeJsonParse(row.dataKeywords, undefined) : undefined,
     dataMessageCount: row.dataMessageCount ?? undefined,
-    contentBlocks: row.contentBlocks ? JSON.parse(row.contentBlocks) : undefined,
+    contentBlocks: row.contentBlocks ? safeJsonParse(row.contentBlocks, undefined) : undefined,
   }))
 }
 

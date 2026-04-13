@@ -7,10 +7,24 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as worker from '../../worker/workerManager'
-import { successResponse, errorResponse, ApiError, ApiErrorCode, conversationNotFound, sessionNotFound, invalidFormat, serverError } from '../errors'
+import {
+  successResponse,
+  errorResponse,
+  ApiError,
+  ApiErrorCode,
+  conversationNotFound,
+  sessionNotFound,
+  invalidFormat,
+  serverError,
+} from '../errors'
 import { handleLogin, handleLogout, handleRegister, handleChangePassword, verifyToken } from '../auth-db'
 import { getActiveConfig, buildPiModel } from '../../ai/llm/index'
-import { streamSimple, completeSimple, type Message as PiMessage, type TextContent as PiTextContent } from '@mariozechner/pi-ai'
+import {
+  streamSimple,
+  completeSimple,
+  type Message as PiMessage,
+  type TextContent as PiTextContent,
+} from '@mariozechner/pi-ai'
 import * as webuiDb from '../../database/global/webui'
 
 function toPiMessages(msgs: Array<{ role: string; content: string }>): PiMessage[] {
@@ -54,11 +68,7 @@ function generateId(): string {
 /**
  * Log operation with context
  */
-function logOperation(
-  operation: string,
-  context: string,
-  details?: Record<string, any>
-): void {
+function logOperation(operation: string, context: string, details?: Record<string, any>): void {
   const timestamp = new Date().toISOString()
   console.log(`[WebUI API] [${timestamp}] ${operation} - ${context}`, details || '')
 }
@@ -66,7 +76,10 @@ function logOperation(
 /**
  * Verify request authentication using JWT middleware
  */
-async function verifyRequest(request: FastifyRequest, _reply: FastifyReply): Promise<{ valid: boolean; userId?: string; username?: string }> {
+async function verifyRequest(
+  request: FastifyRequest,
+  _reply: FastifyReply
+): Promise<{ valid: boolean; userId?: string; username?: string }> {
   try {
     const authHeader = request.headers.authorization
 
@@ -116,12 +129,17 @@ async function handleAuthLogin(
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
+    if (username.length > 50 || password.length > 200) {
+      logOperation('LOGIN_FAILED', 'Credentials exceed maximum length', { username })
+      const err = invalidFormat('Username or password exceeds maximum length')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+
     const result = await handleLogin(username, password)
 
     if (result.success) {
       logOperation('LOGIN_SUCCESS', `User: ${username}`, {
         userId: result.userId,
-        token: result.token?.slice(0, 20) + '...',
         expiresAt: new Date(result.expiresAt || 0).toISOString(),
       })
       return successResponse({
@@ -137,7 +155,7 @@ async function handleAuthLogin(
     }
   } catch (error) {
     console.error('[WebUI API] Login error:', error)
-    const err = serverError(`Login error: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Login error')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -161,6 +179,12 @@ async function handleAuthRegister(
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
+    if (username.length > 50 || password.length > 200) {
+      logOperation('REGISTER_FAILED', 'Credentials exceed maximum length', { username })
+      const err = invalidFormat('Username or password exceeds maximum length')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+
     const result = await handleRegister(username, password)
 
     if (result.success) {
@@ -178,7 +202,7 @@ async function handleAuthRegister(
     }
   } catch (error) {
     console.error('[WebUI API] Registration error:', error)
-    const err = serverError(`Registration error: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Registration error')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -187,10 +211,7 @@ async function handleAuthRegister(
  * POST /api/webui/auth/logout
  * User logout endpoint
  */
-async function handleAuthLogout(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+async function handleAuthLogout(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyRequest(request, reply)
     if (!verification.valid) {
@@ -207,7 +228,7 @@ async function handleAuthLogout(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI API] Logout error:', error)
-    const err = serverError(`Logout error: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Logout error')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -248,7 +269,7 @@ async function handleChangePasswordEndpoint(
     }
   } catch (error) {
     console.error('[WebUI API] Password change error:', error)
-    const err = serverError(`Password change error: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Password change error')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -257,10 +278,7 @@ async function handleChangePasswordEndpoint(
  * GET /api/webui/sessions
  * List all analysis sessions
  */
-async function listSessionsHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+async function listSessionsHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     // Verify authentication
     const verification = await verifyRequest(request, reply)
@@ -278,18 +296,21 @@ async function listSessionsHandler(
     const sessions = await worker.getAllSessions()
     logOperation('LIST_SESSIONS_SUCCESS', `Found ${sessions.length} sessions`, {
       userId: verification.userId,
-      sessionIds: sessions.map(s => s.id),
-      sessionNames: sessions.map(s => (s as any).name),
+      sessionIds: sessions.map((s) => s.id),
+      sessionNames: sessions.map((s) => (s as any).name),
     })
     const response = successResponse(sessions)
     logOperation('LIST_SESSIONS_RESPONSE', `Sending response`, {
       userId: verification.userId,
-      responseShape: { success: response.success, dataLength: Array.isArray(response.data) ? response.data.length : typeof response.data },
+      responseShape: {
+        success: response.success,
+        dataLength: Array.isArray(response.data) ? response.data.length : typeof response.data,
+      },
     })
     return response
   } catch (error) {
     console.error('[WebUI API] Error listing sessions:', error)
-    const err = serverError(`Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to list sessions')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -328,7 +349,47 @@ async function getSessionHandler(
     return successResponse(session)
   } catch (error) {
     console.error('[WebUI API] Error getting session:', error)
-    const err = serverError(`Failed to get session: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to get session')
+    return reply.code(err.statusCode).send(errorResponse(err))
+  }
+}
+
+/**
+ * DELETE /api/webui/sessions/:sessionId
+ * Delete a session and its database
+ */
+async function deleteSessionHandler(
+  request: FastifyRequest<{ Params: { sessionId: string } }>,
+  reply: FastifyReply
+): Promise<any> {
+  try {
+    const verification = await verifyRequest(request, reply)
+    if (!verification.valid) {
+      const err = new ApiError(ApiErrorCode.UNAUTHORIZED, 'Invalid or missing token')
+      return reply.code(401).send(errorResponse(err))
+    }
+
+    const { sessionId } = request.params
+
+    const session = await worker.getSession(sessionId)
+    if (!session) {
+      const err = sessionNotFound(sessionId)
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+
+    logOperation('DELETE_SESSION', `Session: ${sessionId}`, { userId: verification.userId })
+
+    const deleted = await worker.deleteSession(sessionId)
+    if (!deleted) {
+      const err = serverError('Failed to delete session')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+
+    logOperation('DELETE_SESSION_SUCCESS', `Session: ${sessionId}`)
+    return successResponse({ deleted: true })
+  } catch (error) {
+    console.error('[WebUI API] Error deleting session:', error)
+    const err = serverError('Failed to delete session')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -381,7 +442,7 @@ async function createConversationHandler(
     return successResponse(conversation, { conversationId })
   } catch (error) {
     console.error('[WebUI API] Error creating conversation:', error)
-    const err = serverError(`Failed to create conversation: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to create conversation')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -422,7 +483,7 @@ async function listConversationsHandler(
     return successResponse(sessionConversations)
   } catch (error) {
     console.error('[WebUI API] Error listing conversations:', error)
-    const err = serverError(`Failed to list conversations: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to list conversations')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -459,7 +520,7 @@ async function deleteConversationHandler(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI API] Error deleting conversation:', error)
-    const err = serverError(`Failed to delete conversation: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to delete conversation')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -521,11 +582,7 @@ async function sendMessageHandler(
         const historyMsgs = toPiMessages(
           webuiDb.getLastMessages(conversationId, 20).map((m) => ({ role: m.role, content: m.content }))
         )
-        const result = await completeSimple(
-          piModel,
-          { messages: historyMsgs },
-          { apiKey: activeConfig.apiKey }
-        )
+        const result = await completeSimple(piModel, { messages: historyMsgs }, { apiKey: activeConfig.apiKey })
         const aiContent = result.content
           .filter((item): item is PiTextContent => item.type === 'text')
           .map((item) => item.text)
@@ -556,19 +613,20 @@ async function sendMessageHandler(
     return successResponse(userMessage)
   } catch (error) {
     console.error('[WebUI API] Error sending message:', error)
-    const err = serverError(`Failed to send message: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to send message')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 /**
- * GET /api/webui/conversations/:conversationId/stream
- * Stream AI response via SSE for a pending user message
+ * POST /api/webui/conversations/:conversationId/stream
+ * Stream AI response via SSE — content in request body (not query string)
+ * Using POST prevents message content from appearing in server logs and browser history
  */
 async function streamMessageHandler(
   request: FastifyRequest<{
     Params: { conversationId: string }
-    Querystring: { content: string }
+    Body: { content: string }
   }>,
   reply: FastifyReply
 ): Promise<any> {
@@ -579,7 +637,7 @@ async function streamMessageHandler(
   }
 
   const { conversationId } = request.params
-  const content = (request.query as any).content as string | undefined
+  const content = request.body?.content
 
   if (!webuiDb.getConversation(conversationId)) {
     reply.code(404).send({ error: 'Conversation not found' })
@@ -587,7 +645,7 @@ async function streamMessageHandler(
   }
 
   if (!content || content.trim().length === 0) {
-    reply.code(400).send({ error: 'content query param required' })
+    reply.code(400).send({ error: 'content body field required' })
     return
   }
 
@@ -632,11 +690,7 @@ async function streamMessageHandler(
       webuiDb.getLastMessages(conversationId, 20).map((m) => ({ role: m.role, content: m.content }))
     )
 
-    const eventStream = streamSimple(
-      piModel,
-      { messages: historyMsgs },
-      { apiKey: activeConfig.apiKey }
-    )
+    const eventStream = streamSimple(piModel, { messages: historyMsgs }, { apiKey: activeConfig.apiKey })
 
     for await (const event of eventStream) {
       if (event.type === 'text_delta') {
@@ -646,7 +700,7 @@ async function streamMessageHandler(
     }
   } catch (err) {
     console.error('[WebUI API] SSE stream error:', err)
-    sendEvent('error', { message: err instanceof Error ? err.message : String(err) })
+    sendEvent('error', { message: 'AI stream error' })
     reply.raw.end()
     return
   }
@@ -714,7 +768,7 @@ async function getMessagesHandler(
     })
   } catch (error) {
     console.error('[WebUI API] Error getting messages:', error)
-    const err = serverError(`Failed to get messages: ${error instanceof Error ? error.message : String(error)}`)
+    const err = serverError('Failed to get messages')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -756,6 +810,12 @@ export function registerWebUIRoutes(server: FastifyInstance): void {
     getSessionHandler
   )
 
+  server.delete<{ Params: { sessionId: string } }>(
+    '/api/webui/sessions/:sessionId',
+    { logLevel: 'warn' },
+    deleteSessionHandler
+  )
+
   // ==================== Conversation Routes ====================
 
   server.post<{ Body: CreateConversationRequest }>(
@@ -781,29 +841,17 @@ export function registerWebUIRoutes(server: FastifyInstance): void {
   server.post<{
     Params: { conversationId: string }
     Body: SendMessageRequest
-  }>(
-    '/api/webui/conversations/:conversationId/messages',
-    { logLevel: 'warn' },
-    sendMessageHandler
-  )
+  }>('/api/webui/conversations/:conversationId/messages', { logLevel: 'warn' }, sendMessageHandler)
 
-  server.get<{
+  server.post<{
     Params: { conversationId: string }
-    Querystring: { content: string }
-  }>(
-    '/api/webui/conversations/:conversationId/stream',
-    { logLevel: 'warn' },
-    streamMessageHandler
-  )
+    Body: { content: string }
+  }>('/api/webui/conversations/:conversationId/stream', { logLevel: 'warn' }, streamMessageHandler)
 
   server.get<{
     Params: { conversationId: string }
     Querystring: GetMessagesQuery
-  }>(
-    '/api/webui/conversations/:conversationId/messages',
-    { logLevel: 'warn' },
-    getMessagesHandler
-  )
+  }>('/api/webui/conversations/:conversationId/messages', { logLevel: 'warn' }, getMessagesHandler)
 
   console.log('[WebUI API] WebUI routes registered successfully')
 }

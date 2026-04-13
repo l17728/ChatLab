@@ -101,10 +101,11 @@ async function launchApp(options = {}) {
 
   // 为并行 E2E 实例创建独立的用户数据目录，避免共享造成的冲突
   // 这防止了并发进程的状态泄漏、死锁和数据库冲突
-  const userDataDir = options.userDataDir || (process.env.CHATLAB_E2E_USER_DATA_DIR ?
-    path.join(process.env.CHATLAB_E2E_USER_DATA_DIR, `instance-${port}`) :
-    path.join(os.tmpdir(), `chatlab-e2e-${port}`)
-  )
+  const userDataDir =
+    options.userDataDir ||
+    (process.env.CHATLAB_E2E_USER_DATA_DIR
+      ? path.join(process.env.CHATLAB_E2E_USER_DATA_DIR, `instance-${port}`)
+      : path.join(os.tmpdir(), `chatlab-e2e-${port}`))
 
   // 确保用户数据目录存在
   if (!fs.existsSync(userDataDir)) {
@@ -135,8 +136,8 @@ async function launchApp(options = {}) {
   // 重要：必须使用 --remote-debugging-port 命令行参数，而不是环境变量
   // Electron 不会读取 REMOTE_DEBUGGING_PORT 环境变量
   const electronArgs = [
-    `--remote-debugging-port=${port}`,  // 启用 CDP 调试端口
-    appPath,  // 应用路径作为最后的参数
+    `--remote-debugging-port=${port}`, // 启用 CDP 调试端口
+    appPath, // 应用路径作为最后的参数
   ]
 
   const proc = spawn(electronExe, electronArgs, {
@@ -145,8 +146,8 @@ async function launchApp(options = {}) {
     shell: process.platform === 'win32',
     env: {
       ...process.env,
-      TEST_MODE: 'true',  // E2E 测试模式：允许多个实例
-      CHATLAB_E2E_USER_DATA_DIR: userDataDir,  // 为该实例设置隔离的用户数据目录
+      TEST_MODE: 'true', // E2E 测试模式：允许多个实例
+      CHATLAB_E2E_USER_DATA_DIR: userDataDir, // 为该实例设置隔离的用户数据目录
       ELECTRON_ENABLE_LOGGING: '1',
     },
   })
@@ -187,24 +188,35 @@ async function launchApp(options = {}) {
     }
   })
 
-  // 等待应用就绪
-  // 注：这个延迟需要等应用真正启动完成，避免立即测试导致测试失败
-  // TODO: 可以改进为监听应用就绪事件而不是固定延迟
+  // 等待应用就绪（或提前退出）
+  // 使用 Promise.race：若进程在等待期内退出，立即报错而不是等满 startupWaitTime
   const startupWaitTime = options.startupWaitTime || 2000
-  await new Promise((resolve) => setTimeout(resolve, startupWaitTime))
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, startupWaitTime)
 
-  // 检查启动过程中是否出现错误
+    const earlyExitHandler = (code, signal) => {
+      clearTimeout(timer)
+      if (signal) {
+        reject(new Error(`[AppLauncher] Electron 启动期间被信号杀死: ${signal}`))
+      } else if (code !== 0) {
+        reject(new Error(`[AppLauncher] Electron 启动期间异常退出，退出码: ${code}`))
+      } else {
+        // code 0 在启动等待期内退出也是异常（可能是单实例锁冲突）
+        reject(new Error(`[AppLauncher] Electron 在启动等待期内意外退出（code 0）：可能存在单实例锁冲突或初始化失败`))
+      }
+    }
+
+    proc.once('exit', earlyExitHandler)
+
+    // 等待结束后移除监听器，避免后续正常退出触发误报
+    setTimeout(() => proc.removeListener('exit', earlyExitHandler), startupWaitTime + 100)
+  })
+
+  // 检查启动过程中是否出现错误（spawn 失败）
   if (launchError) {
     throw new Error(`[AppLauncher] Electron 启动期间发生错误: ${launchError.message}`)
   }
-
-  // 检查启动期间是否有非零退出或信号终止
-  if (exitCode !== null && exitCode !== 0) {
-    throw new Error(`[AppLauncher] Electron 启动期间异常退出，退出码: ${exitCode}`)
-  }
-  if (exitSignal !== null) {
-    throw new Error(`[AppLauncher] Electron 启动期间被信号杀死: ${exitSignal}`)
-  }
+  // Note: exit-during-startup is now caught by the Promise.race above
 
   return {
     proc,
@@ -246,7 +258,7 @@ async function launchApp(options = {}) {
             // 尝试杀死进程：检查进程是否真的还在运行
             // 如果进程已退出，kill() 会抛出错误，我们忽略它
             try {
-              proc.kill(0)  // 检查进程是否存在（发送信号 0 不会真的杀死）
+              proc.kill(0) // 检查进程是否存在（发送信号 0 不会真的杀死）
               // 进程存在，发送 SIGKILL
               proc.kill('SIGKILL')
             } catch (err) {

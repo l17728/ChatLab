@@ -79,9 +79,27 @@ async function configureCors(server: FastifyInstance, config: StaticFileConfig) 
   }
 
   await server.register(fastifyCors, {
-    origin: true, // Allow any origin for now (restrictive in production)
+    // Restrict to localhost origins only — prevents cross-origin credential theft
+    // when the Web UI is accessed from a browser on the same machine
+    origin: (origin, cb) => {
+      if (!origin) {
+        // Same-origin or non-browser requests (Electron, curl, etc.)
+        cb(null, true)
+        return
+      }
+      try {
+        const { hostname } = new URL(origin)
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+          cb(null, true)
+        } else {
+          cb(new Error('CORS: origin not allowed'), false)
+        }
+      } catch {
+        cb(new Error('CORS: invalid origin'), false)
+      }
+    },
     credentials: true,
-    methods: ['GET', 'HEAD', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 
@@ -95,6 +113,9 @@ async function configureCors(server: FastifyInstance, config: StaticFileConfig) 
  */
 function setCacheHeaders(reply: FastifyReply, filepath: string) {
   const ext = extname(filepath).toLowerCase()
+
+  // Root path '/' serves index.html — treat as HTML
+  const isHtml = ext === '.html' || filepath === '/' || filepath === ''
 
   // Cache busting for JS/CSS (hash in filename)
   if (ext === '.js' || ext === '.css') {
@@ -113,9 +134,9 @@ function setCacheHeaders(reply: FastifyReply, filepath: string) {
     reply.header('Cache-Control', 'public, max-age=86400, immutable')
     console.log('[Web UI Static] Cache: Day-long for image:', filepath)
   }
-  // HTML (never cache)
-  else if (ext === '.html') {
-    reply.header('Cache-Control', 'public, max-age=0, must-revalidate, no-cache')
+  // HTML (never cache) — includes root path '/'
+  else if (isHtml) {
+    reply.header('Cache-Control', 'no-cache, no-store, must-revalidate')
     console.log('[Web UI Static] Cache: No cache for HTML:', filepath)
   }
   // Fonts
@@ -171,6 +192,7 @@ function handleSpaRouting(server: FastifyInstance, config: StaticFileConfig) {
     }
 
     console.log('[Web UI Static] SPA fallback: Serving index.html for route:', requestPath)
+    reply.header('Cache-Control', 'no-cache, no-store, must-revalidate')
     reply.sendFile('index.html', config.root)
   })
 }
@@ -180,10 +202,7 @@ function handleSpaRouting(server: FastifyInstance, config: StaticFileConfig) {
 /**
  * Register static file serving with Fastify
  */
-export async function registerStaticFiles(
-  server: FastifyInstance,
-  config: Partial<StaticFileConfig> = {}
-) {
+export async function registerStaticFiles(server: FastifyInstance, config: Partial<StaticFileConfig> = {}) {
   const finalConfig: StaticFileConfig = { ...DEFAULT_CONFIG, ...config }
 
   if (!finalConfig.enabled) {
@@ -228,10 +247,7 @@ export async function registerStaticFiles(
       server.addHook('onSend', async (_request, reply) => {
         // Only apply to static file responses
         const contentType = reply.getHeader('content-type')
-        if (
-          contentType &&
-          (typeof contentType === 'string' || Array.isArray(contentType))
-        ) {
+        if (contentType && (typeof contentType === 'string' || Array.isArray(contentType))) {
           const typeStr = Array.isArray(contentType) ? contentType[0] : contentType
           if (
             typeStr.includes('text/html') ||
@@ -247,10 +263,12 @@ export async function registerStaticFiles(
       console.log('[Web UI Static] Security headers hook registered')
     }
 
-    // Add hook to set cache headers
+    // Add hook to set cache headers — only for static file responses, not API routes
     server.addHook('onSend', async (request, reply) => {
-      const filepath = request.url
-      setCacheHeaders(reply, filepath)
+      const url = request.url
+      // Skip API routes — they should not receive static-file cache headers
+      if (url.startsWith('/api/')) return
+      setCacheHeaders(reply, url)
     })
 
     console.log('[Web UI Static] Cache headers hook registered')
@@ -259,9 +277,7 @@ export async function registerStaticFiles(
     handleSpaRouting(server, finalConfig)
 
     console.log('[Web UI Static] Initialization complete')
-    console.log(
-      `[Web UI Static] Web UI available at: http://127.0.0.1:${process.env.API_PORT || 9871}/\n`
-    )
+    console.log(`[Web UI Static] Web UI available at: http://127.0.0.1:${process.env.API_PORT || 5200}/\n`)
   } catch (err) {
     console.error('[Web UI Static] Error registering static files:', err)
     throw err

@@ -856,14 +856,23 @@ export async function exportSessionToTempFile(sessionId: string): Promise<string
  * 清理临时导出文件
  */
 export function cleanupTempExportFiles(filePaths: string[]): void {
+  if (!Array.isArray(filePaths)) return
+  const allowedDir = path.resolve(path.join(getDefaultOutputDir(), '.chatlab_temp'))
   for (const filePath of filePaths) {
+    if (typeof filePath !== 'string') continue
+    const resolved = path.resolve(filePath)
+    // Sandbox: only delete files within the .chatlab_temp directory
+    if (!resolved.startsWith(allowedDir + path.sep) && resolved !== allowedDir) {
+      console.warn(`[Merger] Blocked cleanup of path outside temp dir: ${resolved}`)
+      continue
+    }
     try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath)
-        console.log(`[Merger] Cleaning up temp file: ${filePath}`)
+      if (fs.existsSync(resolved)) {
+        fs.unlinkSync(resolved)
+        console.log(`[Merger] Cleaning up temp file: ${resolved}`)
       }
     } catch (err) {
-      console.error(`[Merger] Failed to clean up temp file: ${filePath}`, err)
+      console.error(`[Merger] Failed to clean up temp file: ${resolved}`, err)
     }
   }
 }

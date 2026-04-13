@@ -12,8 +12,8 @@
           <div class="form-group">
             <label for="username">Username</label>
             <input
-              v-model="username"
               id="username"
+              v-model="username"
               type="text"
               placeholder="Enter username"
               required
@@ -24,8 +24,8 @@
           <div class="form-group">
             <label for="password">Password</label>
             <input
-              v-model="password"
               id="password"
+              v-model="password"
               type="password"
               placeholder="Enter password"
               required
@@ -33,11 +33,7 @@
             />
           </div>
 
-          <button
-            type="submit"
-            :disabled="auth.loading.value"
-            class="login-button"
-          >
+          <button type="submit" :disabled="auth.loading.value" class="login-button">
             <span v-if="!auth.loading.value">Login</span>
             <span v-else>
               <span class="spinner"></span>
@@ -51,7 +47,10 @@
         </form>
 
         <div class="credentials-info">
-          <p>Default credentials: <strong>admin / admin123</strong></p>
+          <p>
+            Default credentials:
+            <strong>admin / admin123</strong>
+          </p>
         </div>
       </div>
     </div>
@@ -79,12 +78,34 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth, useLayout, useApiEnvironment, getEnvironmentInfo } from '@/composables/useEnvironment'
+import { useSessionStore } from '@/stores/session'
 
 const router = useRouter()
 const env = useApiEnvironment()
 const auth = useAuth()
 const layout = useLayout()
 const envInfo = computed(() => getEnvironmentInfo())
+const sessionStore = useSessionStore()
+
+/**
+ * 登录成功后的默认落地页：优先跳到第一个会话的概览页（与桌面端体验对齐）。
+ * 若还没有任何会话，退回首页。
+ */
+async function redirectAfterLogin() {
+  try {
+    // 拉一次会话列表（Web UI 模式下走 HTTP listSessions）
+    await sessionStore.loadSessions()
+    const first = sessionStore.sortedSessions?.[0]
+    if (first) {
+      const routeName = first.type === 'private' ? 'private-chat' : 'group-chat'
+      await router.push({ name: routeName, params: { id: first.id } })
+      return
+    }
+  } catch (err) {
+    console.error('[Login] redirectAfterLogin failed:', err)
+  }
+  await router.push('/')
+}
 
 const username = ref('')
 const password = ref('')
@@ -100,11 +121,9 @@ const handleLogin = async () => {
 
   if (result.success) {
     console.log('[Login] Login successful')
-    // Clear sensitive data
     username.value = ''
     password.value = ''
-    // Navigate to dashboard
-    await router.push('/dashboard')
+    await redirectAfterLogin()
   } else {
     console.warn('[Login] Login failed:', result.error)
   }
@@ -117,8 +136,8 @@ onMounted(async () => {
   await auth.checkAuth()
 
   if (auth.isAuthenticated.value) {
-    console.log('[Login] Already authenticated, redirecting to dashboard')
-    await router.push('/dashboard')
+    console.log('[Login] Already authenticated, redirecting')
+    await redirectAfterLogin()
   }
 })
 </script>

@@ -8,7 +8,7 @@ import { app } from 'electron'
 import * as path from 'path'
 import type { ParseProgress } from '../parser'
 import type { StreamImportResult } from './import'
-import { openDatabase } from '../database/core'
+import { openDatabase, deleteSession as dbDeleteSession } from '../database/core'
 import { getDatabaseDir, ensureDir } from '../paths'
 
 // Worker 实例
@@ -328,6 +328,11 @@ export async function getSession(sessionId: string): Promise<any | null> {
 
 export async function closeDatabase(sessionId: string): Promise<void> {
   return sendToWorker('closeDatabase', { sessionId })
+}
+
+export async function deleteSession(sessionId: string): Promise<boolean> {
+  await closeDatabase(sessionId)
+  return dbDeleteSession(sessionId)
 }
 
 // ==================== 成员管理 API ====================

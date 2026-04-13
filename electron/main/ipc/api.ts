@@ -6,91 +6,132 @@ import { ipcMain } from 'electron'
 import type { IpcContext } from './types'
 import * as apiServer from '../api'
 import { loadConfig, regenerateToken, updateConfig } from '../api/config'
-import {
-  loadDataSources,
-  addDataSource,
-  updateDataSource,
-  deleteDataSource,
-  type DataSource,
-} from '../api/dataSource'
-import {
-  initScheduler,
-  stopAllTimers,
-  reloadTimer,
-  triggerPull,
-} from '../api/pullScheduler'
+import { loadDataSources, addDataSource, updateDataSource, deleteDataSource, type DataSource } from '../api/dataSource'
+import { initScheduler, stopAllTimers, reloadTimer, triggerPull } from '../api/pullScheduler'
 
 export function registerApiHandlers(_ctx: IpcContext): void {
   // ==================== API Server Management ====================
 
   ipcMain.handle('api:getConfig', () => {
-    const config = loadConfig()
-    return {
-      enabled: config.enabled,
-      port: config.port,
-      token: config.token,
-      createdAt: config.createdAt,
+    try {
+      const config = loadConfig()
+      return {
+        enabled: config.enabled,
+        port: config.port,
+        token: config.token,
+        createdAt: config.createdAt,
+      }
+    } catch (error) {
+      console.error('[IpcMain] api:getConfig failed:', error)
+      return null
     }
   })
 
   ipcMain.handle('api:getStatus', () => {
-    return apiServer.getStatus()
+    try {
+      return apiServer.getStatus()
+    } catch (error) {
+      console.error('[IpcMain] api:getStatus failed:', error)
+      return { running: false, error: String(error) }
+    }
   })
 
   ipcMain.handle('api:setEnabled', async (_event, enabled: boolean) => {
-    return apiServer.setEnabled(enabled)
+    try {
+      return await apiServer.setEnabled(enabled)
+    } catch (error) {
+      console.error('[IpcMain] api:setEnabled failed:', error)
+      return { success: false, error: String(error) }
+    }
   })
 
   ipcMain.handle('api:setPort', async (_event, port: number) => {
-    return apiServer.setPort(port)
+    try {
+      return await apiServer.setPort(port)
+    } catch (error) {
+      console.error('[IpcMain] api:setPort failed:', error)
+      return { success: false, error: String(error) }
+    }
   })
 
   ipcMain.handle('api:regenerateToken', () => {
-    return regenerateToken()
+    try {
+      return regenerateToken()
+    } catch (error) {
+      console.error('[IpcMain] api:regenerateToken failed:', error)
+      return null
+    }
   })
 
   ipcMain.handle('api:updateConfig', (_event, partial: Record<string, unknown>) => {
-    return updateConfig(partial as any)
+    try {
+      return updateConfig(partial as any)
+    } catch (error) {
+      console.error('[IpcMain] api:updateConfig failed:', error)
+      return { success: false, error: String(error) }
+    }
   })
 
   // ==================== Data Source Management ====================
 
   ipcMain.handle('api:getDataSources', () => {
-    return loadDataSources()
+    try {
+      return loadDataSources()
+    } catch (error) {
+      console.error('[IpcMain] api:getDataSources failed:', error)
+      return []
+    }
   })
 
   ipcMain.handle(
     'api:addDataSource',
     (
       _event,
-      partial: Omit<
-        DataSource,
-        'id' | 'createdAt' | 'lastPullAt' | 'lastStatus' | 'lastError' | 'lastNewMessages'
-      >
+      partial: Omit<DataSource, 'id' | 'createdAt' | 'lastPullAt' | 'lastStatus' | 'lastError' | 'lastNewMessages'>
     ) => {
-      const ds = addDataSource(partial)
-      if (ds.enabled) {
-        reloadTimer(ds.id)
+      try {
+        const ds = addDataSource(partial)
+        if (ds.enabled) {
+          reloadTimer(ds.id)
+        }
+        return ds
+      } catch (error) {
+        console.error('[IpcMain] api:addDataSource failed:', error)
+        return null
       }
-      return ds
     }
   )
 
   ipcMain.handle('api:updateDataSource', (_event, id: string, updates: Partial<DataSource>) => {
-    const ds = updateDataSource(id, updates)
-    if (ds) {
-      reloadTimer(ds.id)
+    try {
+      const ds = updateDataSource(id, updates)
+      if (ds) {
+        reloadTimer(ds.id)
+      }
+      return ds
+    } catch (error) {
+      console.error('[IpcMain] api:updateDataSource failed:', error)
+      return null
     }
-    return ds
   })
 
   ipcMain.handle('api:deleteDataSource', (_event, id: string) => {
-    reloadTimer(id) // stops timer
-    return deleteDataSource(id)
+    try {
+      reloadTimer(id) // stops timer
+      return deleteDataSource(id)
+    } catch (error) {
+      console.error('[IpcMain] api:deleteDataSource failed:', error)
+      return false
+    }
   })
 
   ipcMain.handle('api:triggerPull', async (_event, id: string) => {
-    return triggerPull(id)
+    try {
+      return await triggerPull(id)
+    } catch (error) {
+      console.error('[IpcMain] api:triggerPull failed:', error)
+      return { success: false, error: String(error) }
+    }
   })
 }
 

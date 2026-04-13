@@ -9,19 +9,49 @@ import { ref, computed, onMounted } from 'vue'
 import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useTodoStore } from '@/stores/todo'
+import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
 const props = defineProps<{ sessionId?: string }>()
 
 const todoStore = useTodoStore()
+const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const { filteredTodos, loading, statistics, filter } = storeToRefs(todoStore)
+const { sessions } = storeToRefs(sessionStore)
+
+// 会话 id → 名称映射（来源 badge 使用）
+const sessionNameMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const s of sessions.value) map.set(s.id, s.name)
+  return map
+})
+
+// 跨会话来源过滤
+const scopeFilter = ref<'all' | string>('all')
+
+const availableSources = computed(() => {
+  const ids = new Set<string>()
+  for (const t of filteredTodos.value) {
+    if ((t as any).sourceSessionId) ids.add((t as any).sourceSessionId)
+  }
+  return Array.from(ids).map((id) => ({ id, name: sessionNameMap.value.get(id) || id }))
+})
+
+const scopedTodos = computed(() => {
+  if (scopeFilter.value === 'all') return filteredTodos.value
+  return filteredTodos.value.filter((t: any) => t.sourceSessionId === scopeFilter.value)
+})
 
 // 虚拟列表 (性能优化)
 const TODO_ITEM_HEIGHT = 100
 const VIRTUAL_CONTAINER_HEIGHT = 600
-const { list: virtualTodos, containerProps, wrapperProps } = useVirtualList(filteredTodos, {
+const {
+  list: virtualTodos,
+  containerProps,
+  wrapperProps,
+} = useVirtualList(scopedTodos, {
   itemHeight: TODO_ITEM_HEIGHT,
   overscan: 5,
 })
@@ -59,8 +89,7 @@ async function checkAndShowIdentityModal() {
         name: m.groupNickname || m.accountName || `User_${m.id}`,
         messageCount: m.messageCount ?? 0,
       }))
-      // 获取会话名称
-      const sessions = settingsStore ? [] : []
+      // 暂以 sessionId 作为展示名兜底
       identityModalSessionName.value = props.sessionId
       console.log('[TodoTab] 获取到候选成员:', identityModalCandidates.value)
     } catch (err) {
@@ -174,9 +203,7 @@ const statusOptions = [
 
 function toggleStatusFilter(value: string) {
   const current = filter.value.status || []
-  const next = current.includes(value)
-    ? current.filter((s) => s !== value)
-    : [...current, value]
+  const next = current.includes(value) ? current.filter((s) => s !== value) : [...current, value]
   todoStore.setFilter({ status: next })
 }
 
@@ -191,12 +218,6 @@ function formatDate(ts?: number): string {
 
 function isOverdue(todo: any): boolean {
   return todo.dueTs && todo.dueTs < Date.now() && todo.status !== 'completed' && todo.status !== 'cancelled'
-}
-
-function goToIdentitySettings() {
-  // 打开 Settings → 我的身份
-  const event = new CustomEvent('open-settings', { detail: { tab: 'identity' } })
-  window.dispatchEvent(event)
 }
 
 // 切换到「进行中」状态
@@ -256,9 +277,7 @@ async function saveEditTodo() {
           <div class="border-b border-gray-200 px-6 py-4 dark:border-gray-700">
             <div class="flex items-center gap-2">
               <UIcon name="i-heroicons-user-circle" class="h-6 w-6 text-pink-500" />
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                要使用待办功能，需先设置「我是谁」
-              </h3>
+              <h3 class="text-base font-semibold text-gray-900 dark:text-white">要使用待办功能，需先设置「我是谁」</h3>
             </div>
             <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
               在这个聊天群中，您是哪位成员？（按发言量排序）
@@ -279,7 +298,9 @@ async function saveEditTodo() {
                 @click="confirmIdentity(c.name)"
               >
                 <div class="flex items-center gap-3">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                  <div
+                    class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                  >
                     {{ c.name.charAt(0) }}
                   </div>
                   <span class="font-medium text-gray-900 dark:text-white">{{ c.name }}</span>
@@ -314,10 +335,7 @@ async function saveEditTodo() {
 
           <!-- 底部 -->
           <div class="flex justify-end border-t border-gray-200 px-6 py-3 dark:border-gray-700">
-            <button
-              class="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-              @click="skipIdentity"
-            >
+            <button class="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" @click="skipIdentity">
               跳过此会话
             </button>
           </div>
@@ -330,13 +348,24 @@ async function saveEditTodo() {
       <div class="flex items-center gap-3 text-sm">
         <span class="font-medium text-gray-900 dark:text-white">
           {{ statistics.total }} 个待办
+          <span v-if="scopeFilter !== 'all'" class="text-gray-500">({{ scopedTodos.length }} 在当前筛选)</span>
         </span>
-        <span v-if="statistics.overdue > 0" class="text-red-500">
-          {{ statistics.overdue }} 个已超期
-        </span>
-        <span v-if="statistics.starred > 0" class="text-yellow-500">
-          {{ statistics.starred }} 个星标
-        </span>
+        <span v-if="statistics.overdue > 0" class="text-red-500">{{ statistics.overdue }} 个已超期</span>
+        <span v-if="statistics.starred > 0" class="text-yellow-500">{{ statistics.starred }} 个星标</span>
+
+        <!-- 来源过滤（待办是跨群的个人备忘） -->
+        <div class="flex items-center gap-1 text-xs text-gray-500">
+          <span>来源：</span>
+          <select
+            v-model="scopeFilter"
+            class="rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
+          >
+            <option value="all">全部会话</option>
+            <option v-for="s in availableSources" :key="s.id" :value="s.id">
+              {{ s.name }}
+            </option>
+          </select>
+        </div>
       </div>
 
       <div class="flex items-center gap-2">
@@ -408,136 +437,143 @@ async function saveEditTodo() {
         data-testid="todo-list"
       >
         <ul v-bind="wrapperProps" class="divide-y divide-gray-100 dark:divide-gray-800">
-        <li
-          v-for="{ data: todo } in virtualTodos"
-          :key="todo.id"
-          class="group px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-          data-testid="todo-item"
-        >
-          <div class="flex items-start gap-3">
-            <!-- 完成复选框 -->
-            <button
-              class="mt-0.5 shrink-0 rounded-full border-2 border-gray-300 p-0.5 transition-colors hover:border-green-500 dark:border-gray-600"
-              :class="{ 'border-green-500 bg-green-500': todo.status === 'completed' }"
-              @click="completeTodo(todo.id)"
-            >
-              <UIcon
-                name="i-heroicons-check"
-                class="h-3 w-3"
-                :class="todo.status === 'completed' ? 'text-white' : 'text-transparent'"
-              />
-            </button>
-
-            <!-- 内容 -->
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <!-- 优先级 -->
+          <li
+            v-for="{ data: todo } in virtualTodos"
+            :key="todo.id"
+            class="group px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+            data-testid="todo-item"
+          >
+            <div class="flex items-start gap-3">
+              <!-- 完成复选框 -->
+              <button
+                class="mt-0.5 shrink-0 rounded-full border-2 border-gray-300 p-0.5 transition-colors hover:border-green-500 dark:border-gray-600"
+                :class="{ 'border-green-500 bg-green-500': todo.status === 'completed' }"
+                @click="completeTodo(todo.id)"
+              >
                 <UIcon
-                  name="i-heroicons-flag"
-                  class="h-3.5 w-3.5 shrink-0"
-                  :class="priorityColors[todo.priority] || priorityColors.normal"
+                  name="i-heroicons-check"
+                  class="h-3 w-3"
+                  :class="todo.status === 'completed' ? 'text-white' : 'text-transparent'"
                 />
+              </button>
 
-                <p
-                  class="truncate text-sm font-medium text-gray-900 dark:text-white"
-                  :class="{
-                    'line-through opacity-60': todo.status === 'completed' || todo.status === 'cancelled',
-                  }"
-                >
-                  {{ todo.title }}
+              <!-- 内容 -->
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <!-- 优先级 -->
+                  <UIcon
+                    name="i-heroicons-flag"
+                    class="h-3.5 w-3.5 shrink-0"
+                    :class="priorityColors[todo.priority] || priorityColors.normal"
+                  />
+
+                  <p
+                    class="truncate text-sm font-medium text-gray-900 dark:text-white"
+                    :class="{
+                      'line-through opacity-60': todo.status === 'completed' || todo.status === 'cancelled',
+                    }"
+                  >
+                    {{ todo.title }}
+                  </p>
+
+                  <span
+                    class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium"
+                    :class="statusColors[todo.status]"
+                    data-testid="todo-status-badge"
+                  >
+                    {{ statusLabels[todo.status] }}
+                  </span>
+                </div>
+
+                <p v-if="todo.description" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {{ todo.description }}
                 </p>
 
-                <span
-                  class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium"
-                  :class="statusColors[todo.status]"
-                  data-testid="todo-status-badge"
+                <!-- 进度条（仅在 in_progress 且 progress > 0 时显示） -->
+                <div
+                  v-if="todo.status === 'in_progress' && (todo.progress ?? 0) > 0"
+                  class="mt-1.5 flex items-center gap-2"
                 >
-                  {{ statusLabels[todo.status] }}
-                </span>
-              </div>
-
-              <p v-if="todo.description" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
-                {{ todo.description }}
-              </p>
-
-              <!-- 进度条（仅在 in_progress 且 progress > 0 时显示） -->
-              <div
-                v-if="todo.status === 'in_progress' && (todo.progress ?? 0) > 0"
-                class="mt-1.5 flex items-center gap-2"
-              >
-                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                  <div
-                    class="h-full rounded-full bg-blue-500 transition-all"
-                    :style="{ width: `${todo.progress ?? 0}%` }"
-                  />
+                  <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                    <div
+                      class="h-full rounded-full bg-blue-500 transition-all"
+                      :style="{ width: `${todo.progress ?? 0}%` }"
+                    />
+                  </div>
+                  <span class="shrink-0 text-xs text-gray-400" data-testid="todo-progress-text">
+                    {{ todo.progress ?? 0 }}%
+                  </span>
                 </div>
-                <span class="shrink-0 text-xs text-gray-400" data-testid="todo-progress-text">{{ todo.progress ?? 0 }}%</span>
+
+                <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
+                  <!-- 截止日期 -->
+                  <span v-if="todo.dueTs" :class="{ 'text-red-500': isOverdue(todo) }">
+                    截止 {{ formatDate(todo.dueTs) }}
+                  </span>
+
+                  <!-- 来源标签 -->
+                  <span v-if="todo.sourceType === 'task'" class="text-blue-400" data-testid="todo-source">
+                    来自任务
+                  </span>
+
+                  <!-- 来源会话 badge：跨群聚合，点击可筛选 -->
+                  <span
+                    v-if="todo.sourceSessionId"
+                    class="flex cursor-pointer items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/60"
+                    :title="'点击仅显示此会话的待办'"
+                    @click.stop="scopeFilter = todo.sourceSessionId"
+                  >
+                    <UIcon name="i-heroicons-chat-bubble-left" class="h-3 w-3" />
+                    {{ sessionNameMap.get(todo.sourceSessionId) || '未知会话' }}
+                  </span>
+
+                  <!-- 备注 -->
+                  <span v-if="todo.notes" class="italic">{{ todo.notes }}</span>
+                </div>
               </div>
 
-              <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
-                <!-- 截止日期 -->
-                <span v-if="todo.dueTs" :class="{ 'text-red-500': isOverdue(todo) }">
-                  截止 {{ formatDate(todo.dueTs) }}
-                </span>
+              <!-- 右侧操作 -->
+              <div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <!-- 推进到进行中 -->
+                <button
+                  v-if="todo.status === 'pending'"
+                  class="rounded p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-500 dark:hover:bg-blue-900/20"
+                  title="标记为进行中"
+                  data-testid="todo-status"
+                  @click="setInProgress(todo.id)"
+                >
+                  <UIcon name="i-heroicons-play" class="h-4 w-4" />
+                </button>
 
-                <!-- 来源标签 -->
-                <span v-if="todo.sourceType === 'task'" class="text-blue-400" data-testid="todo-source">
-                  来自任务
-                </span>
-                <span v-else class="text-gray-400" data-testid="todo-source">
-                  手动
-                </span>
+                <!-- 编辑 -->
+                <button
+                  class="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  title="编辑"
+                  :data-testid="`todo-edit-${todo.id}`"
+                  @click="openEditTodo(todo)"
+                >
+                  <UIcon name="i-heroicons-pencil-square" class="h-4 w-4" />
+                </button>
 
-                <!-- 备注 -->
-                <span v-if="todo.notes" class="italic">{{ todo.notes }}</span>
+                <!-- 星标 -->
+                <button
+                  class="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  :class="{ 'text-yellow-400': todo.isStarred, 'text-gray-400': !todo.isStarred }"
+                  @click="toggleStar(todo.id)"
+                >
+                  <UIcon :name="todo.isStarred ? 'i-heroicons-star-solid' : 'i-heroicons-star'" class="h-4 w-4" />
+                </button>
+
+                <!-- 删除 -->
+                <button
+                  class="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20"
+                  @click="deleteTodo(todo.id)"
+                >
+                  <UIcon name="i-heroicons-trash" class="h-4 w-4" />
+                </button>
               </div>
             </div>
-
-            <!-- 右侧操作 -->
-            <div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-              <!-- 推进到进行中 -->
-              <button
-                v-if="todo.status === 'pending'"
-                class="rounded p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-500 dark:hover:bg-blue-900/20"
-                title="标记为进行中"
-                data-testid="todo-status"
-                @click="setInProgress(todo.id)"
-              >
-                <UIcon name="i-heroicons-play" class="h-4 w-4" />
-              </button>
-
-              <!-- 编辑 -->
-              <button
-                class="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                title="编辑"
-                :data-testid="`todo-edit-${todo.id}`"
-                @click="openEditTodo(todo)"
-              >
-                <UIcon name="i-heroicons-pencil-square" class="h-4 w-4" />
-              </button>
-
-              <!-- 星标 -->
-              <button
-                class="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
-                :class="{ 'text-yellow-400': todo.isStarred, 'text-gray-400': !todo.isStarred }"
-                @click="toggleStar(todo.id)"
-              >
-                <UIcon
-                  :name="todo.isStarred ? 'i-heroicons-star-solid' : 'i-heroicons-star'"
-                  class="h-4 w-4"
-                />
-              </button>
-
-              <!-- 删除 -->
-              <button
-                class="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20"
-                @click="deleteTodo(todo.id)"
-              >
-                <UIcon name="i-heroicons-trash" class="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </li>
+          </li>
         </ul>
       </div>
     </div>
@@ -552,10 +588,7 @@ async function saveEditTodo() {
       <div class="w-full max-w-sm rounded-xl bg-white shadow-2xl dark:bg-gray-900">
         <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
           <h3 class="font-medium text-gray-900 dark:text-white">新建待办</h3>
-          <button
-            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            @click="showCreateDialog = false"
-          >
+          <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" @click="showCreateDialog = false">
             <UIcon name="i-heroicons-x-mark" class="h-5 w-5" />
           </button>
         </div>

@@ -10,7 +10,21 @@ import type { KnowledgeItem, KnowledgeQueryOptions } from '../../../electron/mai
 import type { FocusItem, FocusQueryOptions } from '../../../electron/main/services/focusService'
 import type { GraphNode, GraphEdge, GraphQueryOptions } from '../../../electron/main/services/graphService'
 
-export type { GlobalTask, TaskQueryOptions, ExtractionJob, JobType, PersonalTodo, TodoQueryOptions, KnowledgeItem, KnowledgeQueryOptions, FocusItem, FocusQueryOptions, GraphNode, GraphEdge, GraphQueryOptions }
+export type {
+  GlobalTask,
+  TaskQueryOptions,
+  ExtractionJob,
+  JobType,
+  PersonalTodo,
+  TodoQueryOptions,
+  KnowledgeItem,
+  KnowledgeQueryOptions,
+  FocusItem,
+  FocusQueryOptions,
+  GraphNode,
+  GraphEdge,
+  GraphQueryOptions,
+}
 
 export interface CollabApiResult<T = void> {
   success: boolean
@@ -23,18 +37,17 @@ export const collabApi = {
   getTasks: (options?: TaskQueryOptions): Promise<CollabApiResult<GlobalTask[]>> =>
     ipcRenderer.invoke('collab:getTasks', options),
 
-  getTask: (taskId: number): Promise<CollabApiResult<GlobalTask>> =>
-    ipcRenderer.invoke('collab:getTask', taskId),
+  getTask: (taskId: number): Promise<CollabApiResult<GlobalTask>> => ipcRenderer.invoke('collab:getTask', taskId),
 
   createTask: (
-    task: Omit<GlobalTask, 'id' | 'createdTs' | 'updatedTs'>
+    // 主进程允许传入额外的 sessionId，用于把手动创建的任务注册到指定会话
+    task: Omit<GlobalTask, 'id' | 'createdTs' | 'updatedTs'> & { sessionId?: string }
   ): Promise<CollabApiResult<number>> => ipcRenderer.invoke('collab:createTask', task),
 
   updateTask: (taskId: number, updates: Partial<GlobalTask>): Promise<CollabApiResult> =>
     ipcRenderer.invoke('collab:updateTask', taskId, updates),
 
-  deleteTask: (taskId: number): Promise<CollabApiResult> =>
-    ipcRenderer.invoke('collab:deleteTask', taskId),
+  deleteTask: (taskId: number): Promise<CollabApiResult> => ipcRenderer.invoke('collab:deleteTask', taskId),
 
   getTasksBySession: (sessionId: string): Promise<CollabApiResult<GlobalTask[]>> =>
     ipcRenderer.invoke('collab:getTasksBySession', sessionId),
@@ -49,12 +62,28 @@ export const collabApi = {
   createExtractionJob: (
     sessionId: string,
     jobType: JobType,
-    forceRerun?: boolean
+    forceRerun?: boolean,
+    globalNicknames?: string[]
   ): Promise<CollabApiResult<ExtractionJob>> =>
-    ipcRenderer.invoke('collab:createExtractionJob', sessionId, jobType, forceRerun),
+    ipcRenderer.invoke('collab:createExtractionJob', sessionId, jobType, forceRerun, globalNicknames),
 
   retryExtractionJob: (jobId: string): Promise<CollabApiResult> =>
     ipcRenderer.invoke('collab:retryExtractionJob', jobId),
+
+  // 查询增量分析状态：还有多少新消息未被分析
+  getAnalysisStatus: (
+    sessionId: string
+  ): Promise<
+    CollabApiResult<{
+      sessionId: string
+      lastAnalyzedMessageId: number
+      lastAnalyzedAt: number | null
+      totalMessages: number
+      newMessageCount: number
+      hasNewMessages: boolean
+      everAnalyzed: boolean
+    }>
+  > => ipcRenderer.invoke('collab:getAnalysisStatus', sessionId),
 
   getFailedJobs: (limit?: number): Promise<CollabApiResult<ExtractionJob[]>> =>
     ipcRenderer.invoke('collab:getFailedJobs', limit),
@@ -63,8 +92,7 @@ export const collabApi = {
   getTodos: (options?: TodoQueryOptions): Promise<CollabApiResult<PersonalTodo[]>> =>
     ipcRenderer.invoke('collab:getTodos', options),
 
-  getTodo: (todoId: number): Promise<CollabApiResult<PersonalTodo>> =>
-    ipcRenderer.invoke('collab:getTodo', todoId),
+  getTodo: (todoId: number): Promise<CollabApiResult<PersonalTodo>> => ipcRenderer.invoke('collab:getTodo', todoId),
 
   createTodo: (
     todo: Partial<Omit<PersonalTodo, 'id' | 'createdTs' | 'updatedTs'>> & { title: string }
@@ -73,8 +101,7 @@ export const collabApi = {
   updateTodo: (todoId: number, updates: Partial<PersonalTodo>): Promise<CollabApiResult> =>
     ipcRenderer.invoke('collab:updateTodo', todoId, updates),
 
-  deleteTodo: (todoId: number): Promise<CollabApiResult> =>
-    ipcRenderer.invoke('collab:deleteTodo', todoId),
+  deleteTodo: (todoId: number): Promise<CollabApiResult> => ipcRenderer.invoke('collab:deleteTodo', todoId),
 
   syncTodoFromTask: (globalUserId: string, taskId: number): Promise<CollabApiResult<number>> =>
     ipcRenderer.invoke('collab:syncTodoFromTask', globalUserId, taskId),
@@ -116,14 +143,16 @@ export const collabApi = {
   updateFocusItem: (itemId: number, updates: Partial<FocusItem>): Promise<CollabApiResult> =>
     ipcRenderer.invoke('collab:updateFocusItem', itemId, updates),
 
-  archiveFocusItem: (itemId: number): Promise<CollabApiResult> =>
-    ipcRenderer.invoke('collab:archiveFocusItem', itemId),
+  archiveFocusItem: (itemId: number): Promise<CollabApiResult> => ipcRenderer.invoke('collab:archiveFocusItem', itemId),
 
   getFocusActivity: (
     focusId: number,
     limit?: number
-  ): Promise<CollabApiResult<Array<{ sessionId: string; messageId: number; messageTs: number; relevance: number; summary?: string }>>> =>
-    ipcRenderer.invoke('collab:getFocusActivity', focusId, limit),
+  ): Promise<
+    CollabApiResult<
+      Array<{ sessionId: string; messageId: number; messageTs: number; relevance: number; summary?: string }>
+    >
+  > => ipcRenderer.invoke('collab:getFocusActivity', focusId, limit),
 
   // ==================== 知识图谱 ====================
   getGraphNodes: (options?: GraphQueryOptions): Promise<CollabApiResult<GraphNode[]>> =>
@@ -132,8 +161,9 @@ export const collabApi = {
   getGraphEdges: (nodeIds: number[]): Promise<CollabApiResult<GraphEdge[]>> =>
     ipcRenderer.invoke('collab:getGraphEdges', nodeIds),
 
-  getGraphStats: (): Promise<CollabApiResult<{ nodeCount: number; edgeCount: number; nodeTypes: Array<{ type: string; count: number }> }>> =>
-    ipcRenderer.invoke('collab:getGraphStats'),
+  getGraphStats: (): Promise<
+    CollabApiResult<{ nodeCount: number; edgeCount: number; nodeTypes: Array<{ type: string; count: number }> }>
+  > => ipcRenderer.invoke('collab:getGraphStats'),
 
   upsertGraphNode: (node: Omit<GraphNode, 'id' | 'occurrenceCount'>): Promise<CollabApiResult<number>> =>
     ipcRenderer.invoke('collab:upsertGraphNode', node),

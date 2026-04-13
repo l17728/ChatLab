@@ -83,9 +83,37 @@ onMounted(async () => {
   }
 })
 
-function handleImport() {
-  // Navigate to home (Welcome Guide)
-  router.push('/')
+async function handleImport() {
+  // 直接弹文件对话框触发导入，不再跳转到首页让用户再点一次
+  try {
+    const result = await window.api.dialog.showOpenDialog({
+      title: t('home.import.selectFiles'),
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: t('home.import.chatRecords'), extensions: ['json', 'jsonl', 'txt'] },
+        { name: t('home.import.allFiles'), extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) return
+
+    // 单文件：走 importFileFromPath 并跳转
+    if (result.filePaths.length === 1) {
+      const res = await sessionStore.importFileFromPath(result.filePaths[0])
+      if (res.success && sessionStore.currentSessionId) {
+        const session = await window.chatApi.getSession(sessionStore.currentSessionId)
+        if (session) {
+          const routeName = session.type === 'private' ? 'private-chat' : 'group-chat'
+          router.push({ name: routeName, params: { id: sessionStore.currentSessionId } })
+        }
+      }
+    } else {
+      await sessionStore.importFilesFromPaths(result.filePaths)
+    }
+  } catch (err) {
+    console.error('[Sidebar] handleImport failed:', err)
+    // 兜底：跳首页
+    router.push('/')
+  }
 }
 
 function formatTime(timestamp: number): string {

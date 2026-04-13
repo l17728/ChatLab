@@ -139,11 +139,7 @@ onUnmounted(() => {
           <BatchManageTab v-else-if="activeTab === 'data'" key="data" />
           <StorageTab v-else-if="activeTab === 'storage'" key="storage" :ref="(el) => setTabRef('storage', el)" />
           <ApiSettingsTab v-else-if="activeTab === 'api'" key="api" />
-          <IdentityTab
-            v-else-if="activeTab === 'identity'"
-            key="identity"
-            :ref="(el) => setTabRef('identity', el)"
-          />
+          <IdentityTab v-else-if="activeTab === 'identity'" key="identity" :ref="(el) => setTabRef('identity', el)" />
           <AboutTab v-else-if="activeTab === 'about'" key="about" />
         </Transition>
       </div>

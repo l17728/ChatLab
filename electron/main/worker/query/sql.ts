@@ -117,17 +117,17 @@ export function executeRawSQL(sessionId: string, sql: string): SQLResult {
 
   const trimmedSQL = sql.trim()
 
-  // 只允许 SELECT 语句
-  if (!trimmedSQL.toUpperCase().startsWith('SELECT')) {
-    throw new Error('只支持 SELECT 查询语句')
-  }
-
   // 执行查询
   const startTime = Date.now()
 
   try {
-    // better-sqlite3 是同步的，超时由 Worker 管理器控制
     const stmt = db.prepare(trimmedSQL)
+
+    // 使用 better-sqlite3 原生 readonly 属性检查，比字符串匹配更可靠
+    // 可捕获 CTE 写操作（WITH ... AS (SELECT ...) DELETE）等绕过手段
+    if (!stmt.readonly) {
+      throw new Error('只支持 SELECT 查询语句')
+    }
     const rows = stmt.all()
     const duration = Date.now() - startTime
 

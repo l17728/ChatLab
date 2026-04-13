@@ -183,15 +183,24 @@ function handleLinkClick(link: FooterLink) {
     emit('openChangelog')
   } else if (link.action === 'terms') {
     emit('openTerms')
-  } else if (link.url) {
+  } else if (link.url && isSafeUrl(link.url)) {
     window.open(link.url, '_blank')
   }
 }
 
 // 打开社交链接
 function openSocialLink() {
-  if (socialLink.value?.url) {
+  if (socialLink.value?.url && isSafeUrl(socialLink.value.url)) {
     window.open(socialLink.value.url, '_blank')
+  }
+}
+
+// Only allow http/https URLs to prevent javascript: or file: protocol injection
+function isSafeUrl(url: string): boolean {
+  try {
+    return /^https?:\/\//i.test(new URL(url).href)
+  } catch {
+    return false
   }
 }
 

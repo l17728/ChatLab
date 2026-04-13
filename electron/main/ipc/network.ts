@@ -23,7 +23,12 @@ export function registerNetworkHandlers(_context: IpcContext): void {
    * 获取代理配置
    */
   ipcMain.handle('network:getProxyConfig', (): ProxyConfig => {
-    return loadProxyConfig()
+    try {
+      return loadProxyConfig()
+    } catch (error) {
+      console.error('[IpcMain] network:getProxyConfig failed:', error)
+      return { mode: 'system', url: '' } as ProxyConfig
+    }
   })
 
   /**
@@ -31,6 +36,9 @@ export function registerNetworkHandlers(_context: IpcContext): void {
    */
   ipcMain.handle('network:saveProxyConfig', (_event, config: ProxyConfig): { success: boolean; error?: string } => {
     try {
+      if (!config || typeof config !== 'object') {
+        return { success: false, error: 'invalid config' }
+      }
       // 如果是手动模式且填写了 URL，验证 URL 格式
       if (config.mode === 'manual' && config.url) {
         const validation = validateProxyUrl(config.url)
@@ -42,8 +50,8 @@ export function registerNetworkHandlers(_context: IpcContext): void {
       saveProxyConfig(config)
       return { success: true }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      return { success: false, error: `保存配置失败: ${errorMessage}` }
+      console.error('[IpcMain] network:saveProxyConfig failed:', error)
+      return { success: false, error: '保存配置失败' }
     }
   })
 
@@ -53,6 +61,7 @@ export function registerNetworkHandlers(_context: IpcContext): void {
   ipcMain.handle(
     'network:testProxyConnection',
     async (_event, proxyUrl: string): Promise<{ success: boolean; error?: string }> => {
+      if (typeof proxyUrl !== 'string' || !proxyUrl) return { success: false, error: 'invalid proxyUrl' }
       return testProxyConnection(proxyUrl)
     }
   )

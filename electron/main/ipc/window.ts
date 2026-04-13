@@ -20,75 +20,129 @@ export function registerWindowHandlers(ctx: IpcContext): void {
 
   // ==================== 窗口操作 ====================
   ipcMain.on('window-min', (ev) => {
-    ev.preventDefault()
-    win.minimize()
+    try {
+      ev.preventDefault()
+      win.minimize()
+    } catch (error) {
+      console.error('[IpcMain] window-min failed:', error)
+    }
   })
 
   ipcMain.on('window-maxOrRestore', (ev) => {
-    const winSizeState = win.isMaximized()
-    if (winSizeState) {
-      win.restore()
-    } else {
-      win.maximize()
+    try {
+      const winSizeState = win.isMaximized()
+      if (winSizeState) {
+        win.restore()
+      } else {
+        win.maximize()
+      }
+      ev.reply('windowState', win.isMaximized())
+    } catch (error) {
+      console.error('[IpcMain] window-maxOrRestore failed:', error)
     }
-    ev.reply('windowState', win.isMaximized())
   })
 
   ipcMain.on('window-restore', () => {
-    win.restore()
+    try {
+      win.restore()
+    } catch (error) {
+      console.error('[IpcMain] window-restore failed:', error)
+    }
   })
 
   ipcMain.on('window-hide', () => {
-    win.hide()
+    try {
+      win.hide()
+    } catch (error) {
+      console.error('[IpcMain] window-hide failed:', error)
+    }
   })
 
   ipcMain.on('window-close', () => {
-    win.close()
-    appWithQuitFlag.isQuiting = true
-    app.quit()
+    try {
+      win.close()
+      appWithQuitFlag.isQuiting = true
+      app.quit()
+    } catch (error) {
+      console.error('[IpcMain] window-close failed:', error)
+    }
   })
 
   ipcMain.on('window-resize', (_, data) => {
-    if (data.resize) {
-      win.setResizable(true)
-    } else {
-      win.setSize(1180, 752)
-      win.setResizable(false)
+    try {
+      if (!data || typeof data !== 'object') return
+      if (data.resize) {
+        win.setResizable(true)
+      } else {
+        win.setSize(1180, 752)
+        win.setResizable(false)
+      }
+    } catch (error) {
+      console.error('[IpcMain] window-resize failed:', error)
     }
   })
 
   ipcMain.on('open-devtools', () => {
-    win.webContents.openDevTools()
+    try {
+      win.webContents.openDevTools()
+    } catch (error) {
+      console.error('[IpcMain] open-devtools failed:', error)
+    }
   })
 
   // 设置主题模式
   ipcMain.on('window:setThemeSource', (_, mode: 'system' | 'light' | 'dark') => {
-    nativeTheme.themeSource = mode
+    try {
+      nativeTheme.themeSource = mode
 
-    // Windows 上动态更新 overlay 颜色以匹配主题
-    if (process.platform === 'win32' && win) {
-      const isDark = nativeTheme.shouldUseDarkColors
-      win.setTitleBarOverlay({
-        color: isDark ? '#111827' : '#f9fafb', // dark: gray-900, light: gray-50
-        symbolColor: isDark ? '#a1a1aa' : '#52525b', // dark: zinc-400, light: zinc-600
-        height: 32,
-      })
+      // Windows 上动态更新 overlay 颜色以匹配主题
+      if (process.platform === 'win32' && win) {
+        const isDark = nativeTheme.shouldUseDarkColors
+        win.setTitleBarOverlay({
+          color: isDark ? '#111827' : '#f9fafb', // dark: gray-900, light: gray-50
+          symbolColor: isDark ? '#a1a1aa' : '#52525b', // dark: zinc-400, light: zinc-600
+          height: 32,
+        })
+      }
+    } catch (error) {
+      console.error('[IpcMain] window:setThemeSource failed:', error)
     }
   })
 
   // ==================== 应用信息 ====================
   ipcMain.handle('app:getVersion', () => {
-    return app.getVersion()
+    try {
+      return app.getVersion()
+    } catch (error) {
+      console.error('[IpcMain] app:getVersion failed:', error)
+      return ''
+    }
   })
 
   // 重启应用
   ipcMain.handle('app:relaunch', () => {
-    app.relaunch()
-    app.quit()
+    try {
+      app.relaunch()
+      app.quit()
+    } catch (error) {
+      console.error('[IpcMain] app:relaunch failed:', error)
+    }
   })
 
   // 获取远程配置（支持 JSON 和纯文本/Markdown）
   ipcMain.handle('app:fetchRemoteConfig', async (_, url: string) => {
+    if (typeof url !== 'string' || !url) return { success: false, error: 'invalid url' }
+    // SSRF guard: only allow http/https URLs
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return { success: false, error: 'invalid url' }
+    }
+    if (!/^https?:$/.test(parsed.protocol)) {
+      console.warn('[IpcMain] app:fetchRemoteConfig blocked non-http URL:', parsed.protocol)
+      return { success: false, error: 'invalid url: only https/http allowed' }
+    }
     try {
       const response = await fetch(url)
       const contentType = response.headers.get('content-type') || ''
@@ -115,14 +169,21 @@ export function registerWindowHandlers(ctx: IpcContext): void {
 
   // ==================== 更新检查 ====================
   ipcMain.on('check-update', () => {
-    // 手动检查更新（即使是预发布版本也会提示）
-    manualCheckForUpdates()
+    try {
+      manualCheckForUpdates()
+    } catch (error) {
+      console.error('[IpcMain] check-update failed:', error)
+    }
   })
 
   // 模拟更新弹窗（仅开发模式使用）
   ipcMain.on('simulate-update', () => {
-    if (!app.isPackaged) {
-      simulateUpdateDialog(win)
+    try {
+      if (!app.isPackaged) {
+        simulateUpdateDialog(win)
+      }
+    } catch (error) {
+      console.error('[IpcMain] simulate-update failed:', error)
     }
   })
 
@@ -144,6 +205,7 @@ export function registerWindowHandlers(ctx: IpcContext): void {
 
   // 复制图片到剪贴板（base64 data URL）
   ipcMain.handle('copyImage', async (_, dataUrl: string) => {
+    if (typeof dataUrl !== 'string' || !dataUrl) return { success: false, error: 'invalid dataUrl' }
     try {
       // 从 data URL 中提取 base64 数据
       const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '')
@@ -175,12 +237,13 @@ export function registerWindowHandlers(ctx: IpcContext): void {
       return null
     } catch (err) {
       console.error(t('dialog.selectFolderError'), err)
-      throw err
+      return null
     }
   })
 
   // 检查文件是否存在
   ipcMain.handle('checkFileExist', async (_, filePath) => {
+    if (typeof filePath !== 'string' || !filePath) return false
     try {
       await fs.access(filePath)
       return true
@@ -190,10 +253,11 @@ export function registerWindowHandlers(ctx: IpcContext): void {
   })
 
   // 在文件管理器中打开
-  ipcMain.handle('openInFolder', async (_, path) => {
+  ipcMain.handle('openInFolder', async (_, dirPath) => {
+    if (typeof dirPath !== 'string' || !dirPath) return false
     try {
-      await fs.access(path)
-      await shell.showItemInFolder(path)
+      await fs.access(dirPath)
+      await shell.showItemInFolder(dirPath)
       return true
     } catch (error) {
       console.error('Error opening directory:', error)
@@ -204,10 +268,12 @@ export function registerWindowHandlers(ctx: IpcContext): void {
   // 显示打开对话框（通用）
   ipcMain.handle('dialog:showOpenDialog', async (_, options) => {
     try {
-      return await dialog.showOpenDialog(options)
+      if (!options || typeof options !== 'object') return { canceled: true, filePaths: [] }
+      // 指定 parent window，避免无主窗口时对话框无法聚焦/不弹出
+      return await dialog.showOpenDialog(win, options)
     } catch (error) {
-      console.error('Failed to show dialog:', error)
-      throw error
+      console.error('[IpcMain] dialog:showOpenDialog failed:', error)
+      return { canceled: true, filePaths: [] }
     }
   })
 }

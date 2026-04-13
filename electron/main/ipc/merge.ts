@@ -55,6 +55,7 @@ export function registerMergeHandlers(ctx: IpcContext): void {
    * 使用流式解析，数据写入临时数据库，避免内存溢出
    */
   ipcMain.handle('merge:parseFileInfo', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       // 使用流式解析，写入临时数据库
       const result = await worker.streamParseFileInfo(filePath, (progress: ParseProgress) => {
@@ -83,7 +84,7 @@ export function registerMergeHandlers(ctx: IpcContext): void {
       }
     } catch (error) {
       console.error('Failed to parse file info:', error)
-      throw error
+      return { success: false, error: 'File parsing failed' }
     }
   })
 
@@ -91,11 +92,14 @@ export function registerMergeHandlers(ctx: IpcContext): void {
    * 检测合并冲突（使用临时数据库）
    */
   ipcMain.handle('merge:checkConflicts', async (_, filePaths: string[]) => {
+    if (!Array.isArray(filePaths) || filePaths.some((p) => typeof p !== 'string')) {
+      return { success: false, error: 'invalid filePaths' }
+    }
     try {
       return merger.checkConflictsWithTempDb(filePaths, tempDbCache)
     } catch (error) {
       console.error('Failed to detect conflicts:', error)
-      throw error
+      return { success: false, error: 'Conflict detection failed' }
     }
   })
 

@@ -73,7 +73,7 @@ const testCompleteWorkflow = async () => {
     console.log('\n📝 Step 2: Listing sessions...')
     const sessionsResponse = await fetch('http://127.0.0.1:9871/api/webui/sessions', {
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
 
     const sessionsData = await sessionsResponse.json()
@@ -92,13 +92,10 @@ const testCompleteWorkflow = async () => {
 
     // 3. 获取单个会话
     console.log(`\n📝 Step 3: Getting session details (${sessionId})...`)
-    const sessionResponse = await fetch(
-      `http://127.0.0.1:9871/api/webui/sessions/${sessionId}`,
-      {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }
-    )
+    const sessionResponse = await fetch(`http://127.0.0.1:9871/api/webui/sessions/${sessionId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
 
     const sessionData = await sessionResponse.json()
     console.log(`✅ Session Details:`)
@@ -111,7 +108,7 @@ const testCompleteWorkflow = async () => {
     const createConvResponse = await fetch('http://127.0.0.1:9871/api/webui/conversations', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -128,13 +125,10 @@ const testCompleteWorkflow = async () => {
 
     // 5. 列表对话
     console.log(`\n📝 Step 5: Listing conversations for session ${sessionId}...`)
-    const listConvResponse = await fetch(
-      `http://127.0.0.1:9871/api/webui/sessions/${sessionId}/conversations`,
-      {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }
-    )
+    const listConvResponse = await fetch(`http://127.0.0.1:9871/api/webui/sessions/${sessionId}/conversations`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
 
     const listConvData = await listConvResponse.json()
     console.log(`✅ Found ${listConvData.data.length} conversations in this session`)
@@ -148,17 +142,14 @@ const testCompleteWorkflow = async () => {
     ]
 
     for (let i = 0; i < messages.length; i++) {
-      const sendResponse = await fetch(
-        `http://127.0.0.1:9871/api/webui/conversations/${conversationId}/messages`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ content: messages[i] }),
-        }
-      )
+      const sendResponse = await fetch(`http://127.0.0.1:9871/api/webui/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: messages[i] }),
+      })
 
       const msgData = await sendResponse.json()
       console.log(`   ✅ Message ${i + 1}: ${msgData.data.id}`)
@@ -170,27 +161,22 @@ const testCompleteWorkflow = async () => {
       `http://127.0.0.1:9871/api/webui/conversations/${conversationId}/messages?limit=10&offset=0`,
       {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
       }
     )
 
     const messagesData = await getMessagesResponse.json()
     console.log(`✅ Retrieved ${messagesData.data.messages.length} messages (total: ${messagesData.data.total})`)
     messagesData.data.messages.forEach((msg, i) => {
-      console.log(
-        `   ${i + 1}. [${msg.role.toUpperCase()}] ${msg.content.slice(0, 40)}...`
-      )
+      console.log(`   ${i + 1}. [${msg.role.toUpperCase()}] ${msg.content.slice(0, 40)}...`)
     })
 
     // 8. 删除对话
     console.log(`\n📝 Step 8: Deleting conversation...`)
-    const delResponse = await fetch(
-      `http://127.0.0.1:9871/api/webui/conversations/${conversationId}`,
-      {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }
-    )
+    const delResponse = await fetch(`http://127.0.0.1:9871/api/webui/conversations/${conversationId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
 
     const delData = await delResponse.json()
     console.log(`✅ Conversation deleted: ${delData.data.success}`)
@@ -199,7 +185,7 @@ const testCompleteWorkflow = async () => {
     console.log(`\n📝 Step 9: Logging out...`)
     const logoutResponse = await fetch('http://127.0.0.1:9871/api/webui/auth/logout', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
 
     const logoutData = await logoutResponse.json()
@@ -225,9 +211,7 @@ const testErrorScenarios = async () => {
       body: JSON.stringify({ username: 'admin', password: 'wrongpass' }),
     })
     const invalidData = await invalidLoginResponse.json()
-    console.log(
-      `  Status: ${invalidLoginResponse.status}, Error: ${invalidData.error?.message}`
-    )
+    console.log(`  Status: ${invalidLoginResponse.status}, Error: ${invalidData.error?.message}`)
 
     // 测试 2: 缺少 Token
     console.log('\nTest 2: Missing authorization token')
@@ -241,12 +225,10 @@ const testErrorScenarios = async () => {
     console.log('\nTest 3: Invalid token')
     const invalidTokenResponse = await fetch('http://127.0.0.1:9871/api/webui/sessions', {
       method: 'GET',
-      headers: { 'Authorization': 'Bearer invalid.token.here' },
+      headers: { Authorization: 'Bearer invalid.token.here' },
     })
     const invalidTokenData = await invalidTokenResponse.json()
-    console.log(
-      `  Status: ${invalidTokenResponse.status}, Error: ${invalidTokenData.error?.message}`
-    )
+    console.log(`  Status: ${invalidTokenResponse.status}, Error: ${invalidTokenData.error?.message}`)
 
     // 获取有效 token
     const loginResponse = await fetch('http://127.0.0.1:9871/api/webui/auth/login', {
@@ -259,25 +241,19 @@ const testErrorScenarios = async () => {
 
     // 测试 4: 不存在的会话
     console.log('\nTest 4: Non-existent session')
-    const noSessionResponse = await fetch(
-      'http://127.0.0.1:9871/api/webui/sessions/non-existent-id',
-      {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }
-    )
+    const noSessionResponse = await fetch('http://127.0.0.1:9871/api/webui/sessions/non-existent-id', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
     const noSessionData = await noSessionResponse.json()
     console.log(`  Status: ${noSessionResponse.status}, Error: ${noSessionData.error?.message}`)
 
     // 测试 5: 不存在的对话
     console.log('\nTest 5: Non-existent conversation')
-    const noConvResponse = await fetch(
-      'http://127.0.0.1:9871/api/webui/conversations/non-existent-id',
-      {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }
-    )
+    const noConvResponse = await fetch('http://127.0.0.1:9871/api/webui/conversations/non-existent-id', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
     const noConvData = await noConvResponse.json()
     console.log(`  Status: ${noConvResponse.status}, Error: ${noConvData.error?.message}`)
 
@@ -287,7 +263,7 @@ const testErrorScenarios = async () => {
       await (
         await fetch('http://127.0.0.1:9871/api/webui/sessions', {
           method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}` },
         })
       ).json()
     ).data
@@ -296,7 +272,7 @@ const testErrorScenarios = async () => {
       const createConvResponse = await fetch('http://127.0.0.1:9871/api/webui/conversations', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ sessionId: sessions[0].id }),
@@ -308,7 +284,7 @@ const testErrorScenarios = async () => {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ content: '' }),
@@ -348,7 +324,7 @@ const testPerformance = async () => {
       const start = performance.now()
       await fetch('http://127.0.0.1:9871/api/webui/sessions', {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
       })
       const end = performance.now()
       times.push(end - start)

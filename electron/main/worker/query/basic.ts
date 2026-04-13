@@ -14,6 +14,15 @@ import {
   type TimeFilter,
 } from '../core'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 // ==================== 基础查询 ====================
 
 /**
@@ -556,7 +565,7 @@ export function getMembers(sessionId: string): MemberWithStats[] {
     platformId: row.platformId,
     accountName: row.accountName,
     groupNickname: row.groupNickname,
-    aliases: row.aliases ? JSON.parse(row.aliases) : [],
+    aliases: safeJsonParse(row.aliases, []),
     messageCount: row.messageCount,
     avatar: row.avatar,
   }))
@@ -667,7 +676,7 @@ export function getMembersPaginated(sessionId: string, params: MembersPagination
     platformId: row.platformId,
     accountName: row.accountName,
     groupNickname: row.groupNickname,
-    aliases: row.aliases ? JSON.parse(row.aliases) : [],
+    aliases: safeJsonParse(row.aliases, []),
     messageCount: row.messageCount,
     avatar: row.avatar,
   }))

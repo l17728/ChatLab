@@ -202,7 +202,12 @@ class MainProcess {
     this.mainWindowEvents()
 
     this.mainWindow.webContents.setWindowOpenHandler((details) => {
-      shell.openExternal(details.url)
+      // Only allow http/https URLs — block file://, javascript:, and custom protocols
+      if (/^https?:\/\//i.test(details.url)) {
+        shell.openExternal(details.url)
+      } else {
+        console.warn('[App] Blocked openExternal for non-http URL:', details.url)
+      }
       return { action: 'deny' }
     })
 
@@ -300,6 +305,18 @@ class MainProcess {
           this.mainWindow.webContents.send('app-started')
         }
       }, 500)
+    })
+
+    // [TEMP DEBUG] Capture renderer console messages and errors
+    this.mainWindow.webContents.on('console-message', (_e, level, message, line, source) => {
+      const lvl = ['VERBOSE', 'INFO', 'WARNING', 'ERROR'][level] || `LV${level}`
+      console.log(`[Renderer ${lvl}] ${source}:${line} - ${message}`)
+    })
+    this.mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
+      console.error(`[Renderer did-fail-load] ${errorCode} ${errorDescription} - ${validatedURL}`)
+    })
+    this.mainWindow.webContents.on('render-process-gone', (_e, details) => {
+      console.error('[Renderer render-process-gone]', details)
     })
 
     this.mainWindow.on('maximize', () => {

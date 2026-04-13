@@ -5,8 +5,9 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { randomBytes } from 'crypto'
+import { randomBytes, createHmac, timingSafeEqual } from 'crypto'
 import * as userDb from './user-db'
+import { getJwtSecret } from './auth-jwt'
 
 // ==================== Types ====================
 
@@ -30,6 +31,9 @@ const TOKEN_EXPIRY_MS = TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000
 const MAX_LOGIN_ATTEMPTS = 5
 const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000 // 15 minutes
 
+const MAX_REGISTER_ATTEMPTS = 3
+const REGISTER_ATTEMPT_WINDOW_MS = 15 * 60 * 1000 // 15 minutes
+
 // ==================== Module State ====================
 
 const authState: AuthState = {
@@ -37,24 +41,30 @@ const authState: AuthState = {
   lastAttempts: new Map(),
 }
 
+// Separate rate-limit tracker for registration attempts (keyed by username)
+const registerAttempts = new Map<string, { count: number; resetAt: number }>()
+
 // ==================== Token Management ====================
 
 /**
  * Generate session token
  */
-function generateToken(): string {
+function generateToken(userId: string, username: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
   const payload = Buffer.from(
     JSON.stringify({
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor((Date.now() + TOKEN_EXPIRY_MS) / 1000),
       type: 'webui',
-      sessionId: randomBytes(16).toString('hex'),
+      jti: randomBytes(16).toString('hex'),
+      userId,
+      username,
     })
   ).toString('base64url')
-  const signature = randomBytes(32).toString('base64url')
+  const signingInput = `${header}.${payload}`
+  const signature = createHmac('sha256', getJwtSecret()).update(signingInput).digest('base64url')
 
-  return `${header}.${payload}.${signature}`
+  return `${signingInput}.${signature}`
 }
 
 /**
@@ -67,6 +77,22 @@ function validateToken(token: string): { valid: boolean; userId?: string; userna
       return { valid: false }
     }
 
+    // Verify HMAC-SHA256 signature
+    const signingInput = `${parts[0]}.${parts[1]}`
+    const expectedSig = createHmac('sha256', getJwtSecret()).update(signingInput).digest('base64url')
+    let sigsMatch = false
+    try {
+      const expectedBuf = Buffer.from(expectedSig)
+      const actualBuf = Buffer.from(parts[2])
+      sigsMatch = expectedBuf.length === actualBuf.length && timingSafeEqual(expectedBuf, actualBuf)
+    } catch {
+      sigsMatch = false
+    }
+    if (!sigsMatch) {
+      console.warn('[WebUI Auth] Token signature verification failed')
+      return { valid: false }
+    }
+
     const payloadStr = Buffer.from(parts[1], 'base64url').toString()
     const payload = JSON.parse(payloadStr)
 
@@ -76,13 +102,33 @@ function validateToken(token: string): { valid: boolean; userId?: string; userna
       return { valid: false }
     }
 
-    // TEMPORARY WORKAROUND: Accept any valid JWT token format
-    // This bypasses the in-memory token store check for now
-    // TODO: Replace with persistent token store (database/cache)
+    if (!payload.userId || !payload.username || payload.type !== 'webui') {
+      console.log('[WebUI Auth] Token rejected: missing required claims')
+      return { valid: false }
+    }
+
+    // Check the in-memory token store — enforces logout (revokeToken removes the entry)
+    const stored = authState.tokens.get(token)
+    if (stored) {
+      if (stored.expiresAt < Date.now()) {
+        authState.tokens.delete(token)
+        console.log('[WebUI Auth] Token expired (store-side)')
+        return { valid: false }
+      }
+      return {
+        valid: true,
+        userId: stored.userId,
+        username: stored.username,
+      }
+    }
+
+    // Token not in active store but signature is valid and not expired —
+    // accept it (e.g., after app restart) since signature proves it was issued by this server
+    console.log('[WebUI Auth] Token accepted via signature verification (not in active store)')
     return {
       valid: true,
-      userId: payload.userId || 'webui-user',
-      username: payload.username || 'webui-user',
+      userId: payload.userId,
+      username: payload.username,
     }
   } catch (error) {
     console.error('[WebUI Auth] Token validation error:', error)
@@ -130,8 +176,10 @@ function cleanupExpiredTokens(): void {
   }
 }
 
-// Start periodic cleanup every 1 hour
-setInterval(cleanupExpiredTokens, 60 * 60 * 1000)
+// Start periodic cleanup every 1 hour.
+// Save handle so it can be cleared on app shutdown (prevents process from hanging in tests).
+const _cleanupInterval = setInterval(cleanupExpiredTokens, 60 * 60 * 1000)
+if (_cleanupInterval.unref) _cleanupInterval.unref() // allow Node.js to exit even if interval is pending
 
 // ==================== Rate Limiting ====================
 
@@ -178,9 +226,7 @@ function recordFailedLoginAttempt(username: string): void {
   }
 
   const updatedAttempts = authState.lastAttempts.get(username)!
-  console.warn(
-    `[WebUI Auth] Failed login attempt for ${username} (${updatedAttempts.count}/${MAX_LOGIN_ATTEMPTS})`
-  )
+  console.warn(`[WebUI Auth] Failed login attempt for ${username} (${updatedAttempts.count}/${MAX_LOGIN_ATTEMPTS})`)
 }
 
 /**
@@ -195,16 +241,24 @@ function clearLoginAttempts(username: string): void {
 /**
  * Handle user login
  */
-export async function handleLogin(username: string, password: string): Promise<{ success: boolean; token?: string; userId?: string; username?: string; expiresAt?: number; error?: string }> {
+export async function handleLogin(
+  username: string,
+  password: string
+): Promise<{
+  success: boolean
+  token?: string
+  userId?: string
+  username?: string
+  expiresAt?: number
+  error?: string
+}> {
   console.log(`[WebUI Auth] Login attempt: ${username}`)
 
   // Check rate limit
   const rateLimit = checkLoginAttemptLimit(username)
   if (!rateLimit.allowed) {
     const waitTime = Math.ceil((rateLimit.resetAt! - Date.now()) / 1000)
-    console.warn(
-      `[WebUI Auth] Rate limit exceeded for ${username}. Wait ${waitTime}s.`
-    )
+    console.warn(`[WebUI Auth] Rate limit exceeded for ${username}. Wait ${waitTime}s.`)
     return {
       success: false,
       error: `Too many login attempts. Please try again in ${waitTime}s.`,
@@ -223,8 +277,8 @@ export async function handleLogin(username: string, password: string): Promise<{
   }
 
   // Generate token
-  const token = generateToken()
   const user = authResult.user!
+  const token = generateToken(user.id, user.username)
   const expiresAt = Date.now() + TOKEN_EXPIRY_MS
 
   storeToken(token, user.id, user.username)
@@ -246,8 +300,27 @@ export async function handleLogin(username: string, password: string): Promise<{
 /**
  * Handle user registration
  */
-export async function handleRegister(username: string, password: string): Promise<{ success: boolean; userId?: string; error?: string }> {
+export async function handleRegister(
+  username: string,
+  password: string
+): Promise<{ success: boolean; userId?: string; error?: string }> {
   console.log(`[WebUI Auth] Registration attempt: ${username}`)
+
+  // Check registration rate limit (prevents username enumeration and CPU exhaustion via PBKDF2)
+  const now = Date.now()
+  const regAttempt = registerAttempts.get(username)
+  if (regAttempt && now < regAttempt.resetAt && regAttempt.count >= MAX_REGISTER_ATTEMPTS) {
+    const waitSecs = Math.ceil((regAttempt.resetAt - now) / 1000)
+    console.warn(`[WebUI Auth] Registration rate limit exceeded for ${username}. Wait ${waitSecs}s.`)
+    return { success: false, error: `Too many registration attempts. Please try again in ${waitSecs}s.` }
+  }
+
+  // Track this attempt
+  if (!regAttempt || now >= regAttempt.resetAt) {
+    registerAttempts.set(username, { count: 1, resetAt: now + REGISTER_ATTEMPT_WINDOW_MS })
+  } else {
+    regAttempt.count++
+  }
 
   // Validate input
   if (!username || username.trim().length === 0) {
@@ -370,10 +443,12 @@ export function getAuthStatistics(): {
 /**
  * Log auth event for audit trail
  */
-export function logAuthEvent(
-  event: string,
-  username: string,
-  details?: Record<string, any>
-): void {
-  console.log(`[WebUI Auth Event] ${event} - User: ${username}`, details || '')
+export function logAuthEvent(event: string, username: string, details?: Record<string, any>): void {
+  // Strip sensitive fields before logging
+  if (details) {
+    const { token: _t, password: _p, secret: _s, authorization: _a, ...safeDetails } = details
+    console.log(`[WebUI Auth Event] ${event} - User: ${username}`, safeDetails)
+  } else {
+    console.log(`[WebUI Auth Event] ${event} - User: ${username}`)
+  }
 }

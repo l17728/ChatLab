@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -9,6 +9,7 @@ import ScreenCaptureModal from '@/components/common/ScreenCaptureModal.vue'
 import { ChatRecordDrawer } from '@/components/common/ChatRecord'
 import GlobalTaskBar from '@/components/AIChat/GlobalTaskBar.vue'
 import IdentityToast from '@/components/identity/IdentityToast.vue'
+import FirstLaunchIdentityModal from '@/components/identity/FirstLaunchIdentityModal.vue'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
@@ -23,6 +24,9 @@ const settingsStore = useSettingsStore()
 const llmStore = useLLMStore()
 const { isInitialized } = storeToRefs(sessionStore)
 const route = useRoute()
+
+// 首次启动身份弹窗（仅 Electron 桌面模式，globalNicknames 为空时强制弹出）
+const showFirstLaunchIdentity = ref(false)
 
 const tooltip = {
   delayDuration: 100,
@@ -80,7 +84,9 @@ onMounted(async () => {
   }
 
   // 监听导入后身份设置建议（Layer 2）
-  window.electron?.ipcRenderer.on('collab:suggestIdentitySetup', handleSuggestIdentitySetup)
+  // 注：preload 不再暴露原始 ipcRenderer，安全地跳过此监听器（如未来需要请通过 collabApi 暴露专用 API）
+  void handleSuggestIdentitySetup
+  ;(window as any).electron?.ipcRenderer?.on?.('collab:suggestIdentitySetup', handleSuggestIdentitySetup)
 
   // 平台检测 - 设置 CSS 类名以驱动平台差异化样式（如标题栏安全区域高度）
   const platform = navigator.platform.toLowerCase()
@@ -96,6 +102,14 @@ onMounted(async () => {
   llmStore.init()
   // 从数据库加载会话列表
   await sessionStore.loadSessions()
+
+  // 首次启动弹窗：只在"从未完成过"时出现一次，之后永不再弹
+  const done = settingsStore.identityConfig.firstLaunchCompleted
+  console.log('[App] First-launch identity check — firstLaunchCompleted =', done)
+  if (!done) {
+    console.log('[App] Showing first-launch identity modal')
+    showFirstLaunchIdentity.value = true
+  }
 })
 </script>
 
@@ -146,6 +160,8 @@ onMounted(async () => {
     <GlobalTaskBar />
     <!-- 身份推荐 Toast（Layer 2：导入后非侵入式引导） -->
     <IdentityToast />
+    <!-- 首次启动身份弹窗（Layer 1：桌面端首次运行强制收集主昵称） -->
+    <FirstLaunchIdentityModal v-if="!isWebUI" v-model:open="showFirstLaunchIdentity" />
   </UApp>
 </template>
 

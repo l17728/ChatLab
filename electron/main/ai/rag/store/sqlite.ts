@@ -9,6 +9,15 @@ import Database from 'better-sqlite3'
 import type { IVectorStore, VectorSearchResult, VectorStoreStats } from './types'
 import { aiLogger as logger } from '../../logger'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 /**
  * 余弦相似度计算
  */
@@ -167,7 +176,7 @@ export class SQLiteVectorStore implements IVectorStore {
       return {
         id: row.id,
         score,
-        metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+        metadata: safeJsonParse(row.metadata, undefined),
       }
     })
 

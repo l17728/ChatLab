@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { useSettingsStore } from '@/stores/settings'
 import SubTabs from '@/components/UI/SubTabs.vue'
 import { useSubTabsScroll } from '@/composables/useSubTabsScroll'
 
-const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const { identityConfig } = storeToRefs(settingsStore)
 
@@ -16,8 +14,7 @@ const navItems = computed(() => [
   { id: 'strategy', label: '匹配策略' },
   { id: 'overrides', label: '会话覆盖' },
 ])
-const { activeNav, scrollContainerRef, setSectionRef, handleNavChange, scrollToId } =
-  useSubTabsScroll(navItems)
+const { activeNav, scrollContainerRef, setSectionRef, handleNavChange, scrollToId } = useSubTabsScroll(navItems)
 void scrollContainerRef
 
 function scrollToSection(sectionId: string) {
@@ -93,12 +90,7 @@ function resetIdentity() {
   <div class="flex h-full gap-6">
     <!-- 左侧锚点导航 -->
     <div class="w-28 shrink-0">
-      <SubTabs
-        v-model="activeNav"
-        :items="navItems"
-        orientation="vertical"
-        @change="handleNavChange"
-      />
+      <SubTabs v-model="activeNav" :items="navItems" orientation="vertical" @change="handleNavChange" />
     </div>
 
     <!-- 右侧内容 -->
@@ -139,10 +131,7 @@ function resetIdentity() {
                 <UIcon name="i-heroicons-x-mark" class="h-3 w-3" />
               </button>
             </span>
-            <span
-              v-if="identityConfig.globalNicknames.length === 0"
-              class="text-sm text-gray-400 dark:text-gray-500"
-            >
+            <span v-if="identityConfig.globalNicknames.length === 0" class="text-sm text-gray-400 dark:text-gray-500">
               暂未添加昵称
             </span>
           </div>
@@ -185,9 +174,9 @@ function resetIdentity() {
             "
           >
             <input
+              v-model="identityConfig.matchStrategy"
               type="radio"
               :value="opt.value"
-              v-model="identityConfig.matchStrategy"
               class="mt-0.5 accent-pink-500"
             />
             <div>
@@ -203,19 +192,17 @@ function resetIdentity() {
         <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
           <UIcon name="i-heroicons-arrows-right-left" class="h-4 w-4 text-orange-500" />
           会话覆盖
-          <span class="ml-1 rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+          <span
+            class="ml-1 rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+          >
             {{ overrideEntries.length }}
           </span>
         </h3>
-        <div
-          class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50"
-        >
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
           <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">
             当自动匹配无法正确识别时，可在群聊待办页手动指定"我是谁"，覆盖记录在此。
           </p>
-          <div v-if="overrideEntries.length === 0" class="text-sm text-gray-400 dark:text-gray-500">
-            暂无覆盖记录
-          </div>
+          <div v-if="overrideEntries.length === 0" class="text-sm text-gray-400 dark:text-gray-500">暂无覆盖记录</div>
           <ul v-else class="space-y-2">
             <li
               v-for="entry in overrideEntries"
@@ -223,9 +210,7 @@ function resetIdentity() {
               class="flex items-center justify-between rounded-md bg-white px-3 py-2 text-sm dark:bg-gray-700"
             >
               <div class="min-w-0">
-                <p class="truncate font-mono text-xs text-gray-500 dark:text-gray-400">
-                  会话: {{ entry.sessionId }}
-                </p>
+                <p class="truncate font-mono text-xs text-gray-500 dark:text-gray-400">会话: {{ entry.sessionId }}</p>
                 <p class="text-gray-900 dark:text-white">成员 ID: {{ entry.memberId }}</p>
               </div>
               <button

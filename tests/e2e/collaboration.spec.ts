@@ -33,18 +33,31 @@ import { launchApp } from './helpers/app-launcher'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { execSync } from 'child_process'
+
+/** 核心原则：强制终止所有 Electron 进程 */
+function forceKillElectron() {
+  try {
+    execSync('powershell -Command "Stop-Process -Name electron -Force -ErrorAction SilentlyContinue"', {
+      stdio: 'ignore',
+      timeout: 5000,
+    })
+  } catch {
+    /* 没有进程 */
+  }
+}
 
 // ─── 常量 ─────────────────────────────────────────────────────────────────
 
-const COLLAB_PORT = 9873  // 独立端口，避免与其他套件冲突
+const COLLAB_PORT = 9873 // 独立端口，避免与其他套件冲突
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────
 
 /** 通过 CDP 连接已启动的 Electron 实例 */
 async function connectElectron(cdpPort: number): Promise<{ browser: Browser; ctx: BrowserContext; page: Page }> {
   const browser = await chromium.connectOverCDP(`http://localhost:${cdpPort}`)
-  const ctx = browser.contexts()[0] ?? await browser.newContext()
-  const page = ctx.pages()[0] ?? await ctx.newPage()
+  const ctx = browser.contexts()[0] ?? (await browser.newContext())
+  const page = ctx.pages()[0] ?? (await ctx.newPage())
   return { browser, ctx, page }
 }
 
@@ -62,14 +75,44 @@ async function waitForVueApp(page: Page, timeoutMs = 25_000): Promise<void> {
         console.log('[Collab] Vue 应用已就绪')
         return
       }
-    } catch { /* 继续等待 */ }
-    await new Promise(r => setTimeout(r, 500))
+    } catch {
+      /* 继续等待 */
+    }
+    await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`[Collab] Vue 应用在 ${timeoutMs}ms 内未加载`)
 }
 
+/** 系统 userData 路径（collaboration DB 实际存储在这里，因为模块单例在 app.setPath() 前初始化） */
+const SYSTEM_USERDATA = path.join(os.homedir(), 'AppData', 'Roaming', 'ChatLab')
+
+/** 清除系统 userData 中的全局协作数据库（避免 WAL 锁阻塞写入操作） */
+function cleanGlobalDbs() {
+  const globalDbDir = path.join(SYSTEM_USERDATA, 'data', 'databases', 'global')
+  for (const dbName of ['collaboration', 'knowledge_graph', 'identity']) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      const dbFile = path.join(globalDbDir, `${dbName}.db${suffix}`)
+      try {
+        if (fs.existsSync(dbFile)) {
+          fs.unlinkSync(dbFile)
+          console.log(`[Collab] Deleted ${dbName}.db${suffix}`)
+        }
+      } catch (e: any) {
+        console.warn(`[Collab] Could not delete ${dbName}.db${suffix}:`, e.message)
+      }
+    }
+  }
+}
+
 /** 创建带 API Server 配置的临时 userData 并启动 Electron */
 async function startCollabApp() {
+  // Ensure no leftover Electron processes from previous suites
+  forceKillElectron()
+  await new Promise((r) => setTimeout(r, 1000))
+
+  // Clean stale collaboration DBs from prior (possibly crashed) runs to prevent WAL lock hangs
+  cleanGlobalDbs()
+
   const userDataDir = path.join(os.tmpdir(), `chatlab-collab-${Date.now()}`)
   fs.mkdirSync(userDataDir, { recursive: true })
 
@@ -82,13 +125,9 @@ async function startCollabApp() {
     password: 'collab-test-pass',
     allowedOrigins: ['*'],
   }
-  fs.writeFileSync(
-    path.join(settingsDir, 'api-server.json'),
-    JSON.stringify(apiConfig, null, 2),
-    'utf-8'
-  )
+  fs.writeFileSync(path.join(settingsDir, 'api-server.json'), JSON.stringify(apiConfig, null, 2), 'utf-8')
 
-  const app = await launchApp({ userDataDir, startupWaitTime: 3000 })
+  const app = await launchApp({ userDataDir, startupWaitTime: 6000 })
   console.log(`[Collab] Electron 已启动，CDP 端口: ${app.port}`)
   return { app, userDataDir }
 }
@@ -105,7 +144,7 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
   let page: Page
 
   test.beforeAll(async () => {
-    test.setTimeout(90_000)
+    test.setTimeout(120_000)
     console.log('[Collab] 启动测试用 Electron 实例...')
     const result = await startCollabApp()
     app = result.app
@@ -123,11 +162,24 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
 
   test.afterAll(async () => {
     console.log('[Collab] 清理测试环境...')
-    try { await browser?.close() } catch (e) { console.warn('[Collab] 关闭浏览器时出错:', e) }
-    try { await app?.close() } catch (e) { console.warn('[Collab] 关闭应用时出错:', e) }
+    try {
+      await browser?.close()
+    } catch (e) {
+      console.warn('[Collab] 关闭浏览器时出错:', e)
+    }
+    try {
+      await app?.close()
+    } catch (e) {
+      console.warn('[Collab] 关闭应用时出错:', e)
+    }
+    // 核心原则：强制终止所有 Electron 进程
+    forceKillElectron()
+    await new Promise((r) => setTimeout(r, 2000))
     try {
       fs.rmSync(userDataDir, { recursive: true, force: true })
-    } catch (e) { console.warn('[Collab] 清理临时目录时出错:', e) }
+    } catch (e) {
+      console.warn('[Collab] 清理临时目录时出错:', e)
+    }
     console.log('[Collab] 清理完成')
   })
 
@@ -152,10 +204,16 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
     console.log(`[Collab] collabApi 方法: ${methods.join(', ')}`)
 
     const requiredMethods = [
-      'getTodos', 'createTodo', 'updateTodo', 'deleteTodo',
+      'getTodos',
+      'createTodo',
+      'updateTodo',
+      'deleteTodo',
       'getKnowledgeItems',
       'getFocusItems',
-      'getGraphStats', 'getGraphNodes', 'upsertGraphNode', 'upsertGraphEdge',
+      'getGraphStats',
+      'getGraphNodes',
+      'upsertGraphNode',
+      'upsertGraphEdge',
       'getExtractionJobs',
     ]
     for (const method of requiredMethods) {
@@ -265,7 +323,13 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
       // 验证在列表中可查到
       const listR = await api.getTodos()
       const found = listR.data?.find((t: any) => t.id === todoId)
-      return { success: true, id: todoId, todo: getR.data ?? null, found: found ?? null, totalTodos: listR.data?.length ?? 0 }
+      return {
+        success: true,
+        id: todoId,
+        todo: getR.data ?? null,
+        found: found ?? null,
+        totalTodos: listR.data?.length ?? 0,
+      }
     })
 
     console.log(`[Collab] createTodo 结果:`, JSON.stringify(result))
@@ -493,7 +557,7 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
     expect(result.personIsArray).toBe(true)
     expect(result.conceptIsArray).toBe(true)
     expect(result.personCount).toBeGreaterThan(0)
-    expect(result.allPersonType).toBe(true)  // 所有 person 节点的 type 均为 person
+    expect(result.allPersonType).toBe(true) // 所有 person 节点的 type 均为 person
   })
 
   // ── COLLAB-016: 事件格式验证 ───────────────────────────────────────────
@@ -517,14 +581,16 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
           })
         })
 
-        window.dispatchEvent(new CustomEvent('test:collab:extractionDone', {
-          detail: {
-            jobId: 'test-job-123',
-            sessionId: 'test-session-abc',
-            jobType: 'graph',
-            result: { nodesExtracted: 10, edgesExtracted: 5 },
-          },
-        }))
+        window.dispatchEvent(
+          new CustomEvent('test:collab:extractionDone', {
+            detail: {
+              jobId: 'test-job-123',
+              sessionId: 'test-session-abc',
+              jobType: 'graph',
+              result: { nodesExtracted: 10, edgesExtracted: 5 },
+            },
+          })
+        )
       })
     })
 
@@ -566,21 +632,19 @@ test.describe('智能协作 IPC Bridge 集成测试', () => {
     if (!kgDb) {
       // 回退：搜索已知的真实数据目录（app.getPath('userData') / data）
       const home = os.homedir()
-      const realAppData = process.platform === 'darwin'
-        ? path.join(home, 'Library', 'Application Support', 'ChatLab', 'data')
-        : process.platform === 'win32'
-          ? path.join(home, 'AppData', 'Roaming', 'ChatLab', 'data')
-          : path.join(home, '.config', 'ChatLab', 'data')
+      const realAppData =
+        process.platform === 'darwin'
+          ? path.join(home, 'Library', 'Application Support', 'ChatLab', 'data')
+          : process.platform === 'win32'
+            ? path.join(home, 'AppData', 'Roaming', 'ChatLab', 'data')
+            : path.join(home, '.config', 'ChatLab', 'data')
       kgDb = findDbFile(realAppData, 'knowledge_graph.db')
     }
     console.log(`[Collab] knowledge_graph.db: ${kgDb ?? '未找到'}`)
     console.log(`[Collab] userData 目录结构:`, userDataDir)
 
     // knowledge_graph.db 应已被 upsertGraphNode 触发创建
-    expect(
-      kgDb,
-      'knowledge_graph.db 应在 userData 目录中被创建'
-    ).toBeTruthy()
+    expect(kgDb, 'knowledge_graph.db 应在 userData 目录中被创建').toBeTruthy()
 
     if (kgDb) {
       const stat = fs.statSync(kgDb)
@@ -836,11 +900,11 @@ test.describe('FAQ与关注点提取器代码完整性检查', () => {
     const content = fs.readFileSync(ipcPath, 'utf-8')
     expect(content, '应导入 startFaqExtraction').toContain('startFaqExtraction')
     expect(content, '应导入 startFocusExtraction').toContain('startFocusExtraction')
-    expect(content, "应有 faq 分支").toContain("jobType === 'faq'")
-    expect(content, "应有 focus 分支").toContain("jobType === 'focus'")
-    expect(content, "应有 tasks 分支").toContain("jobType === 'tasks'")
-    expect(content, "应有 graph 分支").toContain("jobType === 'graph'")
-    expect(content, "应有 all 分支").toContain("jobType === 'all'")
+    expect(content, '应有 faq 分支').toContain("jobType === 'faq'")
+    expect(content, '应有 focus 分支').toContain("jobType === 'focus'")
+    expect(content, '应有 tasks 分支').toContain("jobType === 'tasks'")
+    expect(content, '应有 graph 分支').toContain("jobType === 'graph'")
+    expect(content, '应有 all 分支').toContain("jobType === 'all'")
     console.log('[Collab] COLLAB-TASK-001 通过')
   })
 
@@ -853,8 +917,8 @@ test.describe('FAQ与关注点提取器代码完整性检查', () => {
     expect(content, '应包含批处理 batchSize').toContain('batchSize')
     expect(content, '应包含重叠 overlap').toContain('overlap')
     expect(content, '应调用 extractionJobService.finishJob').toContain('extractionJobService.finishJob')
-    expect(content, '应推送 extractionDone 事件').toContain("collab:extractionDone")
-    expect(content, '应推送 extractionError 事件').toContain("collab:extractionError")
+    expect(content, '应推送 extractionDone 事件').toContain('collab:extractionDone')
+    expect(content, '应推送 extractionError 事件').toContain('collab:extractionError')
     console.log('[Collab] COLLAB-GRAPH-001 通过')
   })
 
@@ -892,7 +956,7 @@ test.describe('FAQ与关注点提取器代码完整性检查', () => {
     expect(content, '应定义 user_identity_mapping 表').toContain('user_identity_mapping')
     expect(content, '应定义 pending_identity_match 表').toContain('pending_identity_match')
     expect(content, '应有 initializeIdentityDb 函数').toContain('initializeIdentityDb')
-    expect(content, "identity db 应在 initGlobalDatabases 中初始化").toContain("getGlobalDb('identity')")
+    expect(content, 'identity db 应在 initGlobalDatabases 中初始化').toContain("getGlobalDb('identity')")
     console.log('[Collab] COLLAB-IDENTITY-001 通过')
   })
 

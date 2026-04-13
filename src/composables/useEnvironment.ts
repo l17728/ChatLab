@@ -13,12 +13,7 @@ export function isElectronEnvironment(): boolean {
   // Check for Electron-specific globals
   if (typeof window !== 'undefined') {
     const w = window as any
-    return !!(
-      w.electron ||
-      w.chatApi ||
-      w.aiApi ||
-      (w.process && w.process.versions && w.process.versions.electron)
-    )
+    return !!(w.electron || w.chatApi || w.aiApi || (w.process && w.process.versions && w.process.versions.electron))
   }
   return false
 }
@@ -34,9 +29,10 @@ export function isBrowserEnvironment(): boolean {
  * Get API server URL from environment
  */
 export function getApiServerUrl(): string {
-  // In Electron, API runs on localhost:9871
+  // In Electron, API runs on localhost — default port matches electron/main/api/config.ts DEFAULT_CONFIG.port
+  const DEFAULT_PORT = 5200
   if (isElectronEnvironment()) {
-    return 'http://127.0.0.1:9871'
+    return `http://127.0.0.1:${DEFAULT_PORT}`
   }
 
   // In browser, use current host
@@ -44,7 +40,7 @@ export function getApiServerUrl(): string {
     return `${window.location.protocol}//${window.location.host}`
   }
 
-  return 'http://localhost:9871'
+  return `http://localhost:${DEFAULT_PORT}`
 }
 
 /**
@@ -70,7 +66,7 @@ export function getEnvironmentInfo(): {
 
 // ==================== Vue Composables ====================
 
-import { computed, Ref, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getApiClient } from '@/api/client'
 
 /**
@@ -127,7 +123,7 @@ export function useAuth() {
       const isAuth = await apiClient.isAuthenticated()
       isAuthenticated.value = isAuth
 
-      const storedToken = localStorage.getItem('chatlab_token')
+      const storedToken = sessionStorage.getItem('chatlab_token')
       if (storedToken && isAuth) {
         token.value = storedToken
       }
@@ -176,7 +172,7 @@ export function useAuth() {
   }
 
   // Register
-  const register = async (username: string, password: string) => {
+  const register = async (username: string, _password: string) => {
     loading.value = true
     error.value = null
 
@@ -218,8 +214,8 @@ export function useAuth() {
       error.value = null
       apiClient.clearToken()
 
-      localStorage.removeItem('chatlab_token')
-      localStorage.removeItem('chatlab_token_expires_at')
+      sessionStorage.removeItem('chatlab_token')
+      sessionStorage.removeItem('chatlab_token_expires_at')
 
       console.log('[Auth] Logout successful')
       return { success: true }
@@ -258,7 +254,7 @@ export function useApi() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const executeApiCall = async <T,>(
+  const executeApiCall = async <T>(
     operation: () => Promise<T>,
     operationName: string
   ): Promise<{ success: boolean; data?: T; error?: string }> => {
@@ -282,17 +278,15 @@ export function useApi() {
 
   // Session operations
   const listSessions = async () => {
-    return executeApiCall(
-      () => apiClient.listSessions(),
-      'listSessions'
-    )
+    return executeApiCall(() => apiClient.listSessions(), 'listSessions')
   }
 
   const getSession = async (sessionId: string) => {
-    return executeApiCall(
-      () => apiClient.getSession(sessionId),
-      `getSession(${sessionId})`
-    )
+    return executeApiCall(() => apiClient.getSession(sessionId), `getSession(${sessionId})`)
+  }
+
+  const deleteSession = async (sessionId: string) => {
+    return executeApiCall(() => apiClient.deleteSession(sessionId), `deleteSession(${sessionId})`)
   }
 
   // Conversation operations
@@ -309,10 +303,7 @@ export function useApi() {
   }
 
   const listConversations = async (sessionId: string) => {
-    return executeApiCall(
-      () => apiClient.listConversations(sessionId),
-      `listConversations(${sessionId})`
-    )
+    return executeApiCall(() => apiClient.listConversations(sessionId), `listConversations(${sessionId})`)
   }
 
   const deleteConversation = async (conversationId: string) => {
@@ -324,10 +315,7 @@ export function useApi() {
 
   // Message operations
   const sendMessage = async (conversationId: string, content: string) => {
-    return executeApiCall(
-      () => apiClient.sendMessage({ conversationId, content }),
-      `sendMessage(${conversationId})`
-    )
+    return executeApiCall(() => apiClient.sendMessage({ conversationId, content }), `sendMessage(${conversationId})`)
   }
 
   const getMessages = async (conversationId: string, limit = 20, offset = 0) => {
@@ -345,6 +333,7 @@ export function useApi() {
     // Session methods
     listSessions,
     getSession,
+    deleteSession,
 
     // Conversation methods
     createConversation,
@@ -425,8 +414,8 @@ export function initializeWebUI() {
 
   // Restore auth token if available
   if (!envInfo.isElectron) {
-    const token = localStorage.getItem('chatlab_token')
-    const expiresAt = localStorage.getItem('chatlab_token_expires_at')
+    const token = sessionStorage.getItem('chatlab_token')
+    const expiresAt = sessionStorage.getItem('chatlab_token_expires_at')
     if (token && expiresAt) {
       const expiresAtNum = parseInt(expiresAt, 10)
       if (expiresAtNum > Date.now()) {
@@ -434,8 +423,8 @@ export function initializeWebUI() {
         console.log('[Web UI] Restored authentication token from storage')
       } else {
         console.log('[Web UI] Stored token has expired')
-        localStorage.removeItem('chatlab_token')
-        localStorage.removeItem('chatlab_token_expires_at')
+        sessionStorage.removeItem('chatlab_token')
+        sessionStorage.removeItem('chatlab_token_expires_at')
       }
     }
   }
@@ -444,8 +433,3 @@ export function initializeWebUI() {
 
   return envInfo
 }
-
-/**
- * Export types for use in components
- */
-export type { EnvironmentInfo } from './types'

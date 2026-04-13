@@ -6,6 +6,15 @@
 import type Database from 'better-sqlite3'
 import { getGlobalDb } from '../database/global/index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export interface PersonalTodo {
   id: number
   globalUserId: string
@@ -50,6 +59,22 @@ export class TodoService {
   }
 
   /**
+   * 按 (globalUserId, 归一化标题) 查找已存在待办，跨批次去重。
+   */
+  findIdByNormalizedTitle(globalUserId: string, title: string): number | null {
+    const normalized = title.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (!normalized) return null
+    const row = this.db
+      .prepare(
+        `SELECT id FROM personal_todo
+         WHERE global_user_id = ? AND LOWER(TRIM(title)) = ?
+         LIMIT 1`
+      )
+      .get(globalUserId, normalized) as { id: number } | undefined
+    return row?.id ?? null
+  }
+
+  /**
    * 创建待办
    */
   createTodo(todo: Omit<PersonalTodo, 'id' | 'createdTs' | 'updatedTs'>): number {
@@ -65,15 +90,15 @@ export class TodoService {
 
     const result = stmt.run(
       todo.globalUserId,
-      todo.taskId || null,
+      todo.taskId ?? null,
       todo.taskTitle || null,
       todo.title,
       todo.description || null,
       todo.status,
       todo.priority,
       todo.progress ?? 0,
-      todo.dueTs || null,
-      todo.reminderTs || null,
+      todo.dueTs ?? null,
+      todo.reminderTs ?? null,
       todo.notes || null,
       JSON.stringify(todo.tags),
       todo.isStarred ? 1 : 0,
@@ -285,21 +310,21 @@ export class TodoService {
     return {
       id: row.id,
       globalUserId: row.global_user_id,
-      taskId: row.task_id || undefined,
+      taskId: row.task_id ?? undefined,
       taskTitle: row.task_title || undefined,
       title: row.title,
       description: row.description || undefined,
       status: row.status,
       priority: row.priority,
       progress: row.progress ?? 0,
-      dueTs: row.due_ts || undefined,
-      reminderTs: row.reminder_ts || undefined,
+      dueTs: row.due_ts ?? undefined,
+      reminderTs: row.reminder_ts ?? undefined,
       notes: row.notes || undefined,
-      tags: row.tags ? JSON.parse(row.tags) : [],
+      tags: safeJsonParse(row.tags, []),
       isStarred: Boolean(row.is_starred),
       createdTs: row.created_ts,
       updatedTs: row.updated_ts,
-      completedTs: row.completed_ts || undefined,
+      completedTs: row.completed_ts ?? undefined,
       sourceType: row.source_type,
       sourceSessionId: row.source_session_id || undefined,
     }

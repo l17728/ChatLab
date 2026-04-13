@@ -23,7 +23,9 @@ function getTempFilePath(ext: string): string {
 function cleanupTempFile(filePath: string): void {
   try {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function notifySessionListChanged(): void {
@@ -33,7 +35,9 @@ function notifySessionListChanged(): void {
     for (const win of wins) {
       win.webContents.send('api:importCompleted')
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function notifyPullResult(dsId: string, status: 'success' | 'error', detail: string): void {
@@ -43,7 +47,9 @@ function notifyPullResult(dsId: string, status: 'success' | 'error', detail: str
     for (const win of wins) {
       win.webContents.send('api:pullResult', { dsId, status, detail })
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -51,9 +57,7 @@ function notifyPullResult(dsId: string, status: 'success' | 'error', detail: str
  */
 async function fetchToTempFile(ds: DataSource): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const url = ds.url.includes('?')
-      ? `${ds.url}&since=${ds.lastPullAt}`
-      : `${ds.url}?since=${ds.lastPullAt}`
+    const url = ds.url.includes('?') ? `${ds.url}&since=${ds.lastPullAt}` : `${ds.url}?since=${ds.lastPullAt}`
 
     const request = net.request(url)
 
@@ -140,7 +144,9 @@ async function executePull(ds: DataSource): Promise<void> {
       if (result.success) {
         try {
           await worker.generateIncrementalSessions(ds.targetSessionId)
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     } else {
       result = await worker.streamImport(tempFile)
@@ -165,7 +171,7 @@ async function executePull(ds: DataSource): Promise<void> {
     console.error(`[PullScheduler] Pull failed for "${ds.name}":`, error)
     sources[idx].lastPullAt = Math.floor(Date.now() / 1000)
     sources[idx].lastStatus = 'error'
-    sources[idx].lastError = error.message || 'Pull failed'
+    sources[idx].lastError = 'Pull failed'
     saveDataSources(sources)
     notifyPullResult(ds.id, 'error', sources[idx].lastError)
   } finally {
@@ -265,6 +271,7 @@ export async function triggerPull(dsId: string): Promise<{ success: boolean; err
     }
     return { success: true }
   } catch (error: any) {
-    return { success: false, error: error.message }
+    console.error('[PullScheduler] triggerPull failed:', error)
+    return { success: false, error: 'Pull operation failed' }
   }
 }

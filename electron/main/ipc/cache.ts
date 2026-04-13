@@ -72,57 +72,62 @@ export function registerCacheHandlers(_context: IpcContext): void {
    * 获取所有缓存目录信息
    */
   ipcMain.handle('cache:getInfo', async () => {
-    const appDataDir = getAppDataDir()
+    try {
+      const appDataDir = getAppDataDir()
 
-    // 定义缓存目录（应用数据目录下的子目录）
-    const cacheDirectories = [
-      {
-        id: 'databases',
-        name: 'settings.storage.cache.databases.name',
-        description: 'settings.storage.cache.databases.description',
-        path: getDatabaseDir(),
-        icon: 'i-heroicons-circle-stack',
-        canClear: false, // 不允许一键清理，因为是重要数据
-      },
-      {
-        id: 'ai',
-        name: 'settings.storage.cache.ai.name',
-        description: 'settings.storage.cache.ai.description',
-        path: getAiDataDir(),
-        icon: 'i-heroicons-sparkles',
-        canClear: false, // 不允许一键清理
-      },
-      // 临时文件已有自动清理机制（应用启动时、合并完成后），无需暴露给用户
-      {
-        id: 'logs',
-        name: 'settings.storage.cache.logs.name',
-        description: 'settings.storage.cache.logs.description',
-        path: getLogsDir(),
-        icon: 'i-heroicons-document-text',
-        canClear: true, // 可以清理
-      },
-    ]
+      // 定义缓存目录（应用数据目录下的子目录）
+      const cacheDirectories = [
+        {
+          id: 'databases',
+          name: 'settings.storage.cache.databases.name',
+          description: 'settings.storage.cache.databases.description',
+          path: getDatabaseDir(),
+          icon: 'i-heroicons-circle-stack',
+          canClear: false, // 不允许一键清理，因为是重要数据
+        },
+        {
+          id: 'ai',
+          name: 'settings.storage.cache.ai.name',
+          description: 'settings.storage.cache.ai.description',
+          path: getAiDataDir(),
+          icon: 'i-heroicons-sparkles',
+          canClear: false, // 不允许一键清理
+        },
+        // 临时文件已有自动清理机制（应用启动时、合并完成后），无需暴露给用户
+        {
+          id: 'logs',
+          name: 'settings.storage.cache.logs.name',
+          description: 'settings.storage.cache.logs.description',
+          path: getLogsDir(),
+          icon: 'i-heroicons-document-text',
+          canClear: true, // 可以清理
+        },
+      ]
 
-    // 获取每个目录的信息
-    const results = await Promise.all(
-      cacheDirectories.map(async (dir) => {
-        const size = await getDirSize(dir.path)
-        const fileCount = await getFileCount(dir.path)
-        const exists = fsSync.existsSync(dir.path)
+      // 获取每个目录的信息
+      const results = await Promise.all(
+        cacheDirectories.map(async (dir) => {
+          const size = await getDirSize(dir.path)
+          const fileCount = await getFileCount(dir.path)
+          const exists = fsSync.existsSync(dir.path)
 
-        return {
-          ...dir,
-          size,
-          fileCount,
-          exists,
-        }
-      })
-    )
+          return {
+            ...dir,
+            size,
+            fileCount,
+            exists,
+          }
+        })
+      )
 
-    return {
-      baseDir: appDataDir,
-      directories: results,
-      totalSize: results.reduce((sum, dir) => sum + dir.size, 0),
+      return {
+        baseDir: appDataDir,
+        directories: results,
+        totalSize: results.reduce((sum, dir) => sum + dir.size, 0),
+      }
+    } catch (error) {
+      console.error('[Cache] cache:getInfo failed:', error)
+      return { baseDir: '', directories: [], totalSize: 0 }
     }
   })
 
@@ -130,9 +135,14 @@ export function registerCacheHandlers(_context: IpcContext): void {
    * 获取当前数据目录
    */
   ipcMain.handle('cache:getDataDir', async () => {
-    return {
-      path: getAppDataDir(),
-      isCustom: Boolean(getCustomDataDir()),
+    try {
+      return {
+        path: getAppDataDir(),
+        isCustom: Boolean(getCustomDataDir()),
+      }
+    } catch (error) {
+      console.error('[Cache] cache:getDataDir failed:', error)
+      return { path: '', isCustom: false }
     }
   })
 
@@ -185,6 +195,7 @@ export function registerCacheHandlers(_context: IpcContext): void {
    * 清理指定缓存目录
    */
   ipcMain.handle('cache:clear', async (_, cacheId: string) => {
+    if (typeof cacheId !== 'string' || !cacheId) return { success: false, error: '无效的 cacheId' }
     // 只允许清理 logs（temp 由系统自动清理，downloads 已改为系统下载目录）
     const allowedDirs: Record<string, string> = {
       logs: getLogsDir(),
@@ -231,6 +242,18 @@ export function registerCacheHandlers(_context: IpcContext): void {
     const downloadsDir = getDownloadsDir()
 
     try {
+      if (typeof filename !== 'string' || !filename) return { success: false, error: 'invalid filename' }
+      // Path traversal sandbox: ensure resolved path stays inside downloadsDir
+      const resolvedPath = path.resolve(downloadsDir, filename)
+      if (
+        !resolvedPath.startsWith(path.resolve(downloadsDir) + path.sep) &&
+        resolvedPath !== path.resolve(downloadsDir)
+      ) {
+        console.warn('[Cache] Blocked path traversal attempt in saveToDownloads:', filename)
+        return { success: false, error: 'invalid filename' }
+      }
+      const filePath = resolvedPath
+
       // 系统下载目录应该已存在，但以防万一还是确保一下
       ensureDir(downloadsDir)
 
@@ -253,7 +276,6 @@ export function registerCacheHandlers(_context: IpcContext): void {
       }
 
       // 写入文件
-      const filePath = path.join(downloadsDir, filename)
       await fs.writeFile(filePath, buffer)
 
       console.log(`[Cache] Saved file to downloads: ${filePath}`)
@@ -336,6 +358,7 @@ export function registerCacheHandlers(_context: IpcContext): void {
    * 在文件管理器中显示并高亮文件
    */
   ipcMain.handle('cache:showInFolder', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       if (!fsSync.existsSync(filePath)) {
         return { success: false, error: '文件不存在' }

@@ -45,15 +45,12 @@ export async function pluginQuery<T = Record<string, any>>(
  * Web UI 模式: 直接在浏览器主线程 eval（函数为纯计算，无副作用）
  * Electron 模式: window.chatApi.pluginCompute（在 Worker 线程执行）
  */
-export async function pluginCompute<TOutput = any>(
-  fnString: string,
-  input: any
-): Promise<TOutput> {
+export async function pluginCompute<TOutput = any>(fnString: string, input: any): Promise<TOutput> {
   if (isBrowserEnvironment()) {
     console.log('[pluginCompute] browser mode - running compute inline')
     // 安全性说明：fnString 来自同一代码库（packages/chart-*/queries.ts），
     // 是编译时已知的纯函数字符串，非用户输入，不存在 XSS 风险。
-    // eslint-disable-next-line no-new-func
+
     const fn = new Function(`return (${fnString})`)() as (input: any) => TOutput
     return fn(input)
   } else {

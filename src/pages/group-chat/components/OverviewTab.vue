@@ -97,7 +97,9 @@ async function loadWeekdayActivity() {
       const qs = new URLSearchParams()
       if (props.timeFilter?.startTs) qs.set('startTime', String(props.timeFilter.startTs))
       if (props.timeFilter?.endTs) qs.set('endTime', String(props.timeFilter.endTs))
-      const res = await fetch(`/api/v1/sessions/${props.session.id}/stats/weekday-activity${qs.toString() ? '?' + qs : ''}`)
+      const res = await fetch(
+        `/api/v1/sessions/${props.session.id}/stats/weekday-activity${qs.toString() ? '?' + qs : ''}`
+      )
       const json = await res.json()
       weekdayActivity.value = json.data || []
     } else {

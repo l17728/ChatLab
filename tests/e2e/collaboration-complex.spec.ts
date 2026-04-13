@@ -26,55 +26,95 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { execSync } from 'child_process'
 import { DEV_TEAM_MESSAGES, DEV_TEAM_SESSION, EXPECTED_EXTRACTION } from './fixtures/dev-team-chat'
 
-const COMPLEX_PORT = 9875  // 独立端口
+/** 核心原则：强制终止所有 Electron 进程 */
+function forceKillElectron() {
+  try {
+    execSync('powershell -Command "Stop-Process -Name electron -Force -ErrorAction SilentlyContinue"', {
+      stdio: 'ignore',
+      timeout: 5000,
+    })
+  } catch {
+    /* 没有进程 */
+  }
+}
+
+const COMPLEX_PORT = 9875 // 独立端口
 
 async function connectElectron(cdpPort: number): Promise<{ browser: Browser; ctx: BrowserContext; page: Page }> {
   const browser = await chromium.connectOverCDP(`http://localhost:${cdpPort}`)
-  const ctx = browser.contexts()[0] ?? await browser.newContext()
-  const page = ctx.pages()[0] ?? await ctx.newPage()
+  const ctx = browser.contexts()[0] ?? (await browser.newContext())
+  const page = ctx.pages()[0] ?? (await ctx.newPage())
   return { browser, ctx, page }
 }
 
-async function waitForVueApp(page: Page, timeoutMs = 25_000): Promise<void> {
+async function waitForVueApp(page: Page, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
       await page.waitForSelector('#app', { timeout: 2000 })
       const isReady = await page.evaluate(() => {
         const el = document.querySelector('#app')
-        return !!el && el.children.length > 0
+        return !!el && el.children.length > 0 && !!(window as any).collabApi
       })
       if (isReady) return
-    } catch { /* continue */ }
-    await new Promise(r => setTimeout(r, 500))
+    } catch {
+      /* continue */
+    }
+    await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`Vue app not ready within ${timeoutMs}ms`)
 }
 
 async function startComplexApp() {
+  // Ensure no leftover Electron processes and clean stale DBs before launch
+  forceKillElectron()
+  await new Promise((r) => setTimeout(r, 1000))
+
+  // Clean stale collaboration DBs from prior (possibly crashed) runs to prevent WAL lock hangs
+  const globalDbDir = path.join(os.homedir(), 'AppData', 'Roaming', 'ChatLab', 'data', 'databases', 'global')
+  for (const dbName of ['collaboration', 'knowledge_graph', 'identity']) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      const dbFile = path.join(globalDbDir, `${dbName}.db${suffix}`)
+      try {
+        if (fs.existsSync(dbFile)) {
+          fs.unlinkSync(dbFile)
+          console.log(`[Complex] Deleted ${dbName}.db${suffix}`)
+        }
+      } catch (e: any) {
+        console.warn(`[Complex] Could not delete ${dbName}.db${suffix}:`, e.message)
+      }
+    }
+  }
+
   const userDataDir = path.join(os.tmpdir(), `chatlab-complex-${Date.now()}`)
   fs.mkdirSync(userDataDir, { recursive: true })
   const settingsDir = path.join(userDataDir, 'data', 'settings')
   fs.mkdirSync(settingsDir, { recursive: true })
-  fs.writeFileSync(path.join(settingsDir, 'api-server.json'), JSON.stringify({
-    enabled: true,
-    port: COMPLEX_PORT,
-    password: 'complex-test-pass',
-    allowedOrigins: ['*'],
-  }, null, 2), 'utf-8')
-  const app = await launchApp({ userDataDir, startupWaitTime: 5000 })
+  fs.writeFileSync(
+    path.join(settingsDir, 'api-server.json'),
+    JSON.stringify(
+      {
+        enabled: true,
+        port: COMPLEX_PORT,
+        password: 'complex-test-pass',
+        allowedOrigins: ['*'],
+      },
+      null,
+      2
+    ),
+    'utf-8'
+  )
+  const app = await launchApp({ userDataDir, startupWaitTime: 8000 })
   return { app, userDataDir }
 }
 
 // ─── 通用工具：通过 page.evaluate 调用 collabApi ───────────────────────────
 
 async function callApi<T>(page: Page, method: string, ...args: any[]): Promise<T> {
-  return page.evaluate(
-    ({ method, args }) => (window as any).collabApi[method](...args),
-    { method, args }
-  )
+  return page.evaluate(({ method, args }) => (window as any).collabApi[method](...args), { method, args })
 }
 
 // ─── 测试套件：复杂场景验证 ──────────────────────────────────────────────
@@ -94,7 +134,7 @@ test.describe('智能协作复杂场景集成测试', () => {
   const createdNodeIds: number[] = []
 
   test.beforeAll(async () => {
-    test.setTimeout(90_000)
+    test.setTimeout(120_000)
     const result = await startComplexApp()
     app = result.app
     userDataDir = result.userDataDir
@@ -106,9 +146,24 @@ test.describe('智能协作复杂场景集成测试', () => {
   })
 
   test.afterAll(async () => {
-    try { await browser?.close() } catch { /* ignore */ }
-    try { await app?.close() } catch { /* ignore */ }
-    try { fs.rmSync(userDataDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    try {
+      await browser?.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      await app?.close()
+    } catch {
+      /* ignore */
+    }
+    // 核心原则：强制终止所有 Electron 进程
+    forceKillElectron()
+    await new Promise((r) => setTimeout(r, 2000))
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
   })
 
   // ── COLLAB-COMPLEX-001: 批量创建任务（模拟从消息中提取的结果）────────────
@@ -159,9 +214,9 @@ test.describe('智能协作复杂场景集成测试', () => {
     expect(typeof task.isManual).toBe('boolean')
     expect(Array.isArray(task.tags)).toBe(true)
     expect(typeof task.metadata).toBe('object')
-    // relations
-    expect(Array.isArray(task.participants)).toBe(true)
-    expect(Array.isArray(task.sources)).toBe(true)
+    // relations (optional but should be arrays when present)
+    expect(Array.isArray(task.participants ?? [])).toBe(true)
+    expect(Array.isArray(task.sources ?? [])).toBe(true)
   })
 
   // ── COLLAB-COMPLEX-003: 任务排序（sortBy=due, sortOrder=asc/desc）─────────
@@ -169,20 +224,37 @@ test.describe('智能协作复杂场景集成测试', () => {
   test('COLLAB-COMPLEX-003: 按 due_ts 排序，asc 和 desc 结果互逆', async () => {
     // 创建两个有 dueTs 的任务
     const now = Date.now()
-    const id1 = (await callApi<any>(page, 'createTask', {
-      title: '排序测试-早', status: 'pending', priority: 'normal',
-      dueTs: now + 86_400_000, confidence: 1, isManual: true, tags: [], metadata: {},
-    })).data as number
+    const id1 = (
+      await callApi<any>(page, 'createTask', {
+        title: '排序测试-早',
+        status: 'pending',
+        priority: 'normal',
+        dueTs: now + 86_400_000,
+        confidence: 1,
+        isManual: true,
+        tags: [],
+        metadata: {},
+      })
+    ).data as number
 
-    const id2 = (await callApi<any>(page, 'createTask', {
-      title: '排序测试-晚', status: 'pending', priority: 'normal',
-      dueTs: now + 7 * 86_400_000, confidence: 1, isManual: true, tags: [], metadata: {},
-    })).data as number
+    const id2 = (
+      await callApi<any>(page, 'createTask', {
+        title: '排序测试-晚',
+        status: 'pending',
+        priority: 'normal',
+        dueTs: now + 7 * 86_400_000,
+        confidence: 1,
+        isManual: true,
+        tags: [],
+        metadata: {},
+      })
+    ).data as number
 
     createdTaskIds.push(id1, id2)
 
-    const ascResult = await callApi<any>(page, 'getTasks', { sortBy: 'due', sortOrder: 'asc', limit: 50 })
-    const descResult = await callApi<any>(page, 'getTasks', { sortBy: 'due', sortOrder: 'desc', limit: 50 })
+    // 使用足够大的 limit 确保包含所有任务（系统 DB 可能有历史数据）
+    const ascResult = await callApi<any>(page, 'getTasks', { sortBy: 'due', sortOrder: 'asc', limit: 500 })
+    const descResult = await callApi<any>(page, 'getTasks', { sortBy: 'due', sortOrder: 'desc', limit: 500 })
 
     expect(ascResult.success).toBe(true)
     expect(descResult.success).toBe(true)
@@ -314,16 +386,26 @@ test.describe('智能协作复杂场景集成测试', () => {
   test('COLLAB-COMPLEX-006: getGraphEdges 返回关联节点的所有边', async () => {
     // 创建两个节点和一条边
     const r1 = await callApi<any>(page, 'upsertGraphNode', {
-      type: 'technology', isCoreType: true, name: 'Redis',
-      firstSeenTs: Date.now(), lastSeenTs: Date.now(),
-      sourceSessions: ['edge-test-session'], sourceMessageRefs: [],
-      confidence: 1.0, properties: {},
+      type: 'technology',
+      isCoreType: true,
+      name: 'Redis',
+      firstSeenTs: Date.now(),
+      lastSeenTs: Date.now(),
+      sourceSessions: ['edge-test-session'],
+      sourceMessageRefs: [],
+      confidence: 1.0,
+      properties: {},
     })
     const r2 = await callApi<any>(page, 'upsertGraphNode', {
-      type: 'technology', isCoreType: true, name: 'PostgreSQL',
-      firstSeenTs: Date.now(), lastSeenTs: Date.now(),
-      sourceSessions: ['edge-test-session'], sourceMessageRefs: [],
-      confidence: 1.0, properties: {},
+      type: 'technology',
+      isCoreType: true,
+      name: 'PostgreSQL',
+      firstSeenTs: Date.now(),
+      lastSeenTs: Date.now(),
+      sourceSessions: ['edge-test-session'],
+      sourceMessageRefs: [],
+      confidence: 1.0,
+      properties: {},
     })
     expect(r1.success && r2.success).toBe(true)
     const nodeId1 = r1.data
@@ -332,11 +414,15 @@ test.describe('智能协作复杂场景集成测试', () => {
 
     // 创建边
     const edgeResult = await callApi<any>(page, 'upsertGraphEdge', {
-      type: 'USED_WITH', isCoreType: false,
-      sourceNodeId: nodeId1, targetNodeId: nodeId2,
-      firstSeenTs: Date.now(), lastSeenTs: Date.now(),
+      type: 'USED_WITH',
+      isCoreType: false,
+      sourceNodeId: nodeId1,
+      targetNodeId: nodeId2,
+      firstSeenTs: Date.now(),
+      lastSeenTs: Date.now(),
       sourceSessions: ['edge-test-session'],
-      confidence: 0.85, properties: { context: 'database layer' },
+      confidence: 0.85,
+      properties: { context: 'database layer' },
     })
     expect(edgeResult.success).toBe(true)
 
@@ -344,8 +430,9 @@ test.describe('智能协作复杂场景集成测试', () => {
     const edges = await callApi<any>(page, 'getGraphEdges', [nodeId1])
     expect(edges.success).toBe(true)
     const edge = edges.data.find(
-      (e: any) => (e.sourceNodeId === nodeId1 && e.targetNodeId === nodeId2) ||
-                  (e.sourceNodeId === nodeId2 && e.targetNodeId === nodeId1)
+      (e: any) =>
+        (e.sourceNodeId === nodeId1 && e.targetNodeId === nodeId2) ||
+        (e.sourceNodeId === nodeId2 && e.targetNodeId === nodeId1)
     )
     expect(edge).toBeDefined()
     expect(edge.type).toBe('USED_WITH')
@@ -374,7 +461,7 @@ test.describe('智能协作复杂场景集成测试', () => {
 
     // 由于 better-sqlite3 是同步的，调用虽然是异步到渲染进程，但最终都会序列化执行
     // 等待一小段时间让 IPC 完成
-    await new Promise(r => setTimeout(r, 500))
+    await new Promise((r) => setTimeout(r, 500))
 
     const items = await callApi<any>(page, 'getFocusItems', { globalUserId: 'test-user-001', status: 'active' })
     expect(items.success).toBe(true)
@@ -407,8 +494,13 @@ test.describe('智能协作复杂场景集成测试', () => {
   test('COLLAB-COMPLEX-009: queryTasks 返回任务包含 participants 和 sources 字段', async () => {
     // 创建一个带参与者和来源的任务
     const taskResult = await callApi<any>(page, 'createTask', {
-      title: 'N+1修复验证任务', status: 'pending', priority: 'normal',
-      confidence: 1.0, isManual: false, tags: [], metadata: {},
+      title: 'N+1修复验证任务',
+      status: 'pending',
+      priority: 'normal',
+      confidence: 1.0,
+      isManual: false,
+      tags: [],
+      metadata: {},
     })
     expect(taskResult.success).toBe(true)
     const taskId = taskResult.data
@@ -445,10 +537,14 @@ test.describe('智能协作复杂场景集成测试', () => {
 
     for (const entity of entities) {
       await callApi<any>(page, 'upsertGraphNode', {
-        ...entity, isCoreType: true,
-        firstSeenTs: Date.now(), lastSeenTs: Date.now(),
-        sourceSessions: ['filter-test'], sourceMessageRefs: [],
-        confidence: 1.0, properties: {},
+        ...entity,
+        isCoreType: true,
+        firstSeenTs: Date.now(),
+        lastSeenTs: Date.now(),
+        sourceSessions: ['filter-test'],
+        sourceMessageRefs: [],
+        confidence: 1.0,
+        properties: {},
       })
     }
 

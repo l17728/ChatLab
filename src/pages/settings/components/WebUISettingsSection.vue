@@ -75,7 +75,6 @@ async function savePassword() {
       Web UI 远程访问
     </h3>
     <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50 space-y-4">
-
       <!-- 启用开关 -->
       <div class="flex items-center justify-between">
         <div>
@@ -114,7 +113,9 @@ async function savePassword() {
       <div v-if="webUIConfig.enabled">
         <label class="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">访问地址</label>
         <div class="flex items-center gap-2">
-          <span class="flex-1 rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300">
+          <span
+            class="flex-1 rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300"
+          >
             {{ accessUrl }}
           </span>
           <button
@@ -154,7 +155,6 @@ async function savePassword() {
           </button>
         </div>
       </div>
-
     </div>
   </div>
 </template>

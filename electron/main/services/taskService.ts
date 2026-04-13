@@ -6,6 +6,15 @@
 import type Database from 'better-sqlite3'
 import { getGlobalDb } from '../database/global/index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export interface TaskParticipant {
   globalUserId: string
   role: string
@@ -42,7 +51,6 @@ export interface GlobalTask {
 export interface TaskQueryOptions {
   status?: string | string[]
   owner?: string
-  sessionId?: string
   priority?: string | string[]
   dueBefore?: number
   dueAfter?: number
@@ -62,6 +70,23 @@ export class TaskService {
   /**
    * 创建任务
    */
+  /**
+   * 按归一化后的标题查找已存在任务，用于跨批次/跨次运行时去重合并源头。
+   * 归一化规则：小写 + 去首尾空白 + 压缩多空白为单空格，与 SQLite 保持一致。
+   */
+  findIdByNormalizedTitle(title: string): number | null {
+    const normalized = title.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (!normalized) return null
+    const row = this.db
+      .prepare(
+        `SELECT id FROM global_task
+         WHERE LOWER(TRIM(title)) = ?
+         LIMIT 1`
+      )
+      .get(normalized) as { id: number } | undefined
+    return row?.id ?? null
+  }
+
   createTask(task: Omit<GlobalTask, 'id' | 'createdTs' | 'updatedTs'>): number {
     const now = Date.now()
 
@@ -80,7 +105,7 @@ export class TaskService {
       task.priority,
       task.ownerGlobalUserId || null,
       task.ownerDisplayName || null,
-      task.dueTs || null,
+      task.dueTs ?? null,
       now,
       now,
       task.confidence,
@@ -96,9 +121,7 @@ export class TaskService {
    * 获取任务
    */
   getTask(taskId: number): GlobalTask | null {
-    const row = this.db
-      .prepare('SELECT * FROM global_task WHERE id = ?')
-      .get(taskId) as any
+    const row = this.db.prepare('SELECT * FROM global_task WHERE id = ?').get(taskId) as any
 
     if (!row) return null
     const task = this.parseTask(row)
@@ -134,8 +157,8 @@ export class TaskService {
       merged.priority,
       merged.ownerGlobalUserId || null,
       merged.ownerDisplayName || null,
-      merged.dueTs || null,
-      merged.completedTs || null,
+      merged.dueTs ?? null,
+      merged.completedTs ?? null,
       merged.confidence,
       merged.isManual ? 1 : 0,
       JSON.stringify(merged.tags),
@@ -148,7 +171,13 @@ export class TaskService {
     if (updates.isManual) {
       Object.keys(updates).forEach((key) => {
         if (key !== 'isManual' && current[key as keyof GlobalTask] !== updates[key as keyof GlobalTask]) {
-          this.recordEditHistory(taskId, key, String(current[key as keyof GlobalTask]), String(updates[key as keyof GlobalTask]), 'manual')
+          this.recordEditHistory(
+            taskId,
+            key,
+            String(current[key as keyof GlobalTask]),
+            String(updates[key as keyof GlobalTask]),
+            'manual'
+          )
         }
       })
     }
@@ -322,8 +351,8 @@ export class TaskService {
       completedTs: row.completed_ts,
       confidence: row.confidence,
       isManual: row.is_manual === 1,
-      tags: row.tags ? JSON.parse(row.tags) : [],
-      metadata: row.metadata ? JSON.parse(row.metadata) : {},
+      tags: safeJsonParse(row.tags, []),
+      metadata: safeJsonParse(row.metadata, {}),
     }
   }
 
@@ -367,7 +396,9 @@ export class TaskService {
 
     // 批量查询参与者
     const participantRows = this.db
-      .prepare(`SELECT task_id, global_user_id, role, session_id FROM task_participant WHERE task_id IN (${placeholders})`)
+      .prepare(
+        `SELECT task_id, global_user_id, role, session_id FROM task_participant WHERE task_id IN (${placeholders})`
+      )
       .all(...ids) as any[]
     const participantsByTaskId = new Map<number, TaskParticipant[]>()
     for (const r of participantRows) {
@@ -381,7 +412,9 @@ export class TaskService {
 
     // 批量查询来源
     const sourceRows = this.db
-      .prepare(`SELECT task_id, session_id, message_id, message_ts, confidence FROM task_source WHERE task_id IN (${placeholders})`)
+      .prepare(
+        `SELECT task_id, session_id, message_id, message_ts, confidence FROM task_source WHERE task_id IN (${placeholders})`
+      )
       .all(...ids) as any[]
     const sourcesByTaskId = new Map<number, TaskSource[]>()
     for (const r of sourceRows) {

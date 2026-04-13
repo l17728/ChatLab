@@ -14,6 +14,25 @@ const selectedNode = ref<any>(null)
 const isFullscreen = ref(false)
 const pinnedNodeIds = ref<Set<string>>(new Set())
 
+// Hover tooltip state
+const hoverTip = ref<{ visible: boolean; x: number; y: number; data: any }>({
+  visible: false,
+  x: 0,
+  y: 0,
+  data: null,
+})
+
+function formatTs(ts?: number): string {
+  if (!ts) return '-'
+  return new Date(ts).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 // Dual-handle time range slider
 const allNodes = computed(() => graphStore.nodes)
 
@@ -112,7 +131,9 @@ function exportGraphML() {
   ]
   for (const n of filteredNodes.value) {
     lines.push(`    <node id="${nodeIdMap.get(n.id)}">`)
-    lines.push(`      <data key="name">${(n.displayName || n.name).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</data>`)
+    lines.push(
+      `      <data key="name">${(n.displayName || n.name).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</data>`
+    )
     lines.push(`      <data key="type">${n.type}</data>`)
     lines.push(`      <data key="confidence">${n.confidence}</data>`)
     lines.push('    </node>')
@@ -183,10 +204,15 @@ async function initCytoscape() {
           style: {
             'background-color': 'data(color)',
             label: 'data(label)',
-            'font-size': '10px',
+            'font-size': '7px',
+            'font-weight': 500,
             color: '#fff',
             'text-valign': 'center',
             'text-halign': 'center',
+            'text-wrap': 'ellipsis',
+            'text-max-width': 'data(size)',
+            'text-outline-width': 1,
+            'text-outline-color': 'data(color)',
             width: 'data(size)',
             height: 'data(size)',
           },
@@ -200,7 +226,7 @@ async function initCytoscape() {
             'target-arrow-shape': 'triangle',
             'curve-style': 'bezier',
             label: 'data(label)',
-            'font-size': '8px',
+            'font-size': '6px',
             color: '#64748b',
           },
         },
@@ -228,6 +254,27 @@ async function initCytoscape() {
         selectedNode.value = null
       }
     })
+
+    cytoscapeInstance.value.on('mouseover', 'node', (evt: any) => {
+      const pos = evt.renderedPosition || evt.target.renderedPosition()
+      hoverTip.value = {
+        visible: true,
+        x: pos.x,
+        y: pos.y,
+        data: evt.target.data(),
+      }
+    })
+
+    cytoscapeInstance.value.on('mousemove', 'node', (evt: any) => {
+      if (!hoverTip.value.visible) return
+      const pos = evt.renderedPosition || evt.target.renderedPosition()
+      hoverTip.value.x = pos.x
+      hoverTip.value.y = pos.y
+    })
+
+    cytoscapeInstance.value.on('mouseout', 'node', () => {
+      hoverTip.value.visible = false
+    })
   } catch (error) {
     console.warn('[GraphTab] Cytoscape init failed:', error)
     cytoscapeAvailable.value = false
@@ -244,6 +291,8 @@ function buildCytoscapeElements() {
       size: Math.min(60, Math.max(25, 15 + n.occurrenceCount * 3)),
       occurrenceCount: n.occurrenceCount,
       confidence: n.confidence,
+      firstSeenTs: n.firstSeenTs,
+      lastSeenTs: n.lastSeenTs,
     },
   }))
 
@@ -280,9 +329,18 @@ function toggleFullscreen() {
   const el = graphContainer.value?.closest('.flex.h-full') as HTMLElement | null
   if (!el) return
   if (!document.fullscreenElement) {
-    el.requestFullscreen().then(() => { isFullscreen.value = true }).catch(() => {})
+    el.requestFullscreen()
+      .then(() => {
+        isFullscreen.value = true
+      })
+      .catch(() => {})
   } else {
-    document.exitFullscreen().then(() => { isFullscreen.value = false }).catch(() => {})
+    document
+      .exitFullscreen()
+      .then(() => {
+        isFullscreen.value = false
+      })
+      .catch(() => {})
   }
 }
 
@@ -341,7 +399,7 @@ async function rebuildGraph() {
   if (isBrowserEnvironment() || isRebuilding.value) return
   isRebuilding.value = true
   try {
-    const props = graphStore  // sessionId not needed — graph is global
+    // graph is global, sessionId not needed
     const result = await window.collabApi?.createExtractionJob('__global__', 'graph', true)
     if (!result?.success) {
       // fallback: reload from DB
@@ -409,11 +467,7 @@ watch([filteredNodes, filteredEdges], () => {
           data-testid="graph-rebuild"
           @click="rebuildGraph"
         >
-          <UIcon
-            name="i-heroicons-arrow-path"
-            class="h-3.5 w-3.5"
-            :class="{ 'animate-spin': isRebuilding }"
-          />
+          <UIcon name="i-heroicons-arrow-path" class="h-3.5 w-3.5" :class="{ 'animate-spin': isRebuilding }" />
           {{ isRebuilding ? '重建中...' : '重新构建' }}
         </button>
       </div>
@@ -436,10 +490,7 @@ watch([filteredNodes, filteredEdges], () => {
           @click="toggleTypeFilter(opt.value)"
         >
           <div class="flex items-center gap-2">
-            <div
-              class="h-2.5 w-2.5 rounded-full"
-              :style="{ backgroundColor: getNodeColor(opt.value) }"
-            />
+            <div class="h-2.5 w-2.5 rounded-full" :style="{ backgroundColor: getNodeColor(opt.value) }" />
             <span>{{ opt.label }}</span>
           </div>
           <span class="text-gray-400">{{ opt.count }}</span>
@@ -500,8 +551,8 @@ watch([filteredNodes, filteredEdges], () => {
             <div
               class="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-pink-400"
               :style="{
-                left: `${((sliderFrom > 0 ? sliderFrom : timeMin) - timeMin) / (timeMax - timeMin) * 100}%`,
-                right: `${100 - ((sliderTo > 0 ? sliderTo : timeMax) - timeMin) / (timeMax - timeMin) * 100}%`,
+                left: `${(((sliderFrom > 0 ? sliderFrom : timeMin) - timeMin) / (timeMax - timeMin)) * 100}%`,
+                right: `${100 - (((sliderTo > 0 ? sliderTo : timeMax) - timeMin) / (timeMax - timeMin)) * 100}%`,
               }"
             />
             <!-- 起始滑块 -->
@@ -562,9 +613,11 @@ watch([filteredNodes, filteredEdges], () => {
           <div class="mt-2 space-y-1">
             <button
               class="w-full rounded border px-2 py-0.5 text-xs transition-colors"
-              :class="pinnedNodeIds.has(selectedNode.id)
-                ? 'border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400'
-                : 'border-gray-300 text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'"
+              :class="
+                pinnedNodeIds.has(selectedNode.id)
+                  ? 'border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400'
+                  : 'border-gray-300 text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'
+              "
               @click="togglePinNode"
             >
               {{ pinnedNodeIds.has(selectedNode.id) ? '取消固定' : '固定节点' }}
@@ -607,15 +660,8 @@ watch([filteredNodes, filteredEdges], () => {
         <p class="text-xs">当前共 {{ filteredNodes.length }} 个节点，{{ filteredEdges.length }} 条关系</p>
         <div class="mt-4 max-w-sm rounded-lg bg-gray-50 p-3 text-left text-xs text-gray-500 dark:bg-gray-800">
           <div class="font-medium text-gray-700 dark:text-gray-300">节点列表（前20）</div>
-          <div
-            v-for="node in filteredNodes.slice(0, 20)"
-            :key="node.id"
-            class="mt-1 flex items-center gap-2"
-          >
-            <div
-              class="h-2 w-2 rounded-full"
-              :style="{ backgroundColor: getNodeColor(node.type) }"
-            />
+          <div v-for="node in filteredNodes.slice(0, 20)" :key="node.id" class="mt-1 flex items-center gap-2">
+            <div class="h-2 w-2 rounded-full" :style="{ backgroundColor: getNodeColor(node.type) }" />
             <span>{{ node.displayName || node.name }}</span>
             <span class="text-gray-400">{{ node.type }}</span>
           </div>
@@ -626,9 +672,35 @@ watch([filteredNodes, filteredEdges], () => {
       <div
         v-show="filteredNodes.length > 0 && cytoscapeAvailable"
         ref="graphContainer"
-        class="h-full w-full"
+        class="relative h-full w-full"
         data-testid="graph-canvas"
-      />
+      >
+        <!-- 悬浮节点信息 -->
+        <div
+          v-show="hoverTip.visible && hoverTip.data"
+          class="pointer-events-none absolute z-20 min-w-[160px] rounded-md border border-gray-200 bg-white/95 px-2.5 py-1.5 text-xs shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/95"
+          :style="{
+            left: `${hoverTip.x + 14}px`,
+            top: `${hoverTip.y + 14}px`,
+          }"
+        >
+          <div class="font-medium text-gray-900 dark:text-white">{{ hoverTip.data?.label }}</div>
+          <div class="mt-0.5 flex items-center gap-1.5 text-gray-500">
+            <span class="inline-block h-2 w-2 rounded-full" :style="{ backgroundColor: hoverTip.data?.color }" />
+            <span>{{ hoverTip.data?.type }}</span>
+          </div>
+          <div class="mt-1 text-gray-500">
+            提及 {{ hoverTip.data?.occurrenceCount }} 次 · 置信度
+            {{ Math.round((hoverTip.data?.confidence ?? 0) * 100) }}%
+          </div>
+          <div v-if="hoverTip.data?.firstSeenTs" class="mt-1 text-[10px] text-gray-400">
+            首次 {{ formatTs(hoverTip.data?.firstSeenTs) }}
+          </div>
+          <div v-if="hoverTip.data?.lastSeenTs" class="text-[10px] text-gray-400">
+            最近 {{ formatTs(hoverTip.data?.lastSeenTs) }}
+          </div>
+        </div>
+      </div>
 
       <!-- 隐藏的节点列表，用于 E2E 测试（Cytoscape 是 canvas，无 DOM 元素） -->
       <ul aria-hidden="true" class="sr-only">
@@ -655,7 +727,7 @@ watch([filteredNodes, filteredEdges], () => {
   border-radius: 50%;
   background: #ec4899;
   border: 2px solid white;
-  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   cursor: pointer;
   pointer-events: all;
 }

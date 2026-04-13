@@ -5,7 +5,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { GlobalTask } from '@/electron/main/services/taskService'
+import type { GlobalTask } from '@electron/main/services/taskService'
 
 export interface TaskFilter {
   source?: string // 会话ID或 'all'

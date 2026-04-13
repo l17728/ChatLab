@@ -84,10 +84,15 @@ export async function initLocale(): Promise<void> {
   console.log(`[i18n] Initialized with locale: ${lng}`)
 
   ipcMain.on('locale:change', async (_event, newLocale: string) => {
-    if (newLocale !== i18next.language) {
-      await i18next.changeLanguage(newLocale)
-      saveLocale(newLocale)
-      console.log(`[i18n] Locale changed to: ${newLocale}`)
+    try {
+      if (typeof newLocale !== 'string' || !newLocale) return
+      if (newLocale !== i18next.language) {
+        await i18next.changeLanguage(newLocale)
+        saveLocale(newLocale)
+        console.log(`[i18n] Locale changed to: ${newLocale}`)
+      }
+    } catch (error) {
+      console.error('[IpcMain] locale:change failed:', error)
     }
   })
 }

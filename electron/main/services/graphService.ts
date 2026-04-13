@@ -6,6 +6,15 @@
 import type Database from 'better-sqlite3'
 import { getGlobalDb } from '../database/global/index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export interface GraphNode {
   id: number
   type: string
@@ -57,22 +66,29 @@ export class GraphService {
    * 添加或更新节点（upsert）
    */
   upsertNode(node: Omit<GraphNode, 'id' | 'occurrenceCount'>): number {
-    const existing = this.db.prepare('SELECT id, occurrence_count FROM graph_node WHERE type = ? AND name = ?').get(node.type, node.name) as any
+    const existing = this.db
+      .prepare('SELECT id, occurrence_count FROM graph_node WHERE type = ? AND name = ?')
+      .get(node.type, node.name) as any
 
     if (existing) {
       // 合并 sourceSessions（保留历史会话，追加新会话）
       const existingRow = this.db.prepare('SELECT source_sessions FROM graph_node WHERE id = ?').get(existing.id) as any
-      const existingSessions: string[] = existingRow?.source_sessions ? JSON.parse(existingRow.source_sessions) : []
+      const existingSessions: string[] = safeJsonParse(existingRow?.source_sessions, [])
       const mergedSessions = Array.from(new Set([...existingSessions, ...node.sourceSessions]))
 
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         UPDATE graph_node SET
-          last_seen_ts = ?,
+          first_seen_ts = MIN(first_seen_ts, ?),
+          last_seen_ts = MAX(last_seen_ts, ?),
           occurrence_count = occurrence_count + 1,
           confidence = MAX(confidence, ?),
           source_sessions = ?
         WHERE id = ?
-      `).run(node.lastSeenTs, node.confidence, JSON.stringify(mergedSessions), existing.id)
+      `
+        )
+        .run(node.firstSeenTs, node.lastSeenTs, node.confidence, JSON.stringify(mergedSessions), existing.id)
       return existing.id
     }
 
@@ -106,24 +122,29 @@ export class GraphService {
    * 添加或更新边（upsert）
    */
   upsertEdge(edge: Omit<GraphEdge, 'id' | 'occurrenceCount'>): number {
-    const existing = this.db.prepare(
-      'SELECT id FROM graph_edge WHERE source_node_id = ? AND target_node_id = ? AND type = ?'
-    ).get(edge.sourceNodeId, edge.targetNodeId, edge.type) as any
+    const existing = this.db
+      .prepare('SELECT id FROM graph_edge WHERE source_node_id = ? AND target_node_id = ? AND type = ?')
+      .get(edge.sourceNodeId, edge.targetNodeId, edge.type) as any
 
     if (existing) {
       // 合并 sourceSessions（保留历史会话）
       const existingRow = this.db.prepare('SELECT source_sessions FROM graph_edge WHERE id = ?').get(existing.id) as any
-      const existingSessions: string[] = existingRow?.source_sessions ? JSON.parse(existingRow.source_sessions) : []
+      const existingSessions: string[] = safeJsonParse(existingRow?.source_sessions, [])
       const mergedSessions = Array.from(new Set([...existingSessions, ...edge.sourceSessions]))
 
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         UPDATE graph_edge SET
-          last_seen_ts = ?,
+          first_seen_ts = MIN(first_seen_ts, ?),
+          last_seen_ts = MAX(last_seen_ts, ?),
           occurrence_count = occurrence_count + 1,
           confidence = MAX(confidence, ?),
           source_sessions = ?
         WHERE id = ?
-      `).run(edge.lastSeenTs, edge.confidence, JSON.stringify(mergedSessions), existing.id)
+      `
+        )
+        .run(edge.firstSeenTs, edge.lastSeenTs, edge.confidence, JSON.stringify(mergedSessions), existing.id)
       return existing.id
     }
 
@@ -177,13 +198,17 @@ export class GraphService {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = options.limit ? `LIMIT ${options.limit}` : 'LIMIT 500'
+    const safeLimit = Number.isFinite(options.limit) && options.limit! > 0 ? Math.floor(options.limit!) : 500
 
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM graph_node ${where}
       ORDER BY occurrence_count DESC
-      ${limit}
-    `).all(...params) as any[]
+      LIMIT ?
+    `
+      )
+      .all(...params, safeLimit) as any[]
 
     return rows.map((row) => this.mapNodeRow(row))
   }
@@ -195,12 +220,16 @@ export class GraphService {
     if (nodeIds.length === 0) return []
 
     const placeholders = nodeIds.map(() => '?').join(',')
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM graph_edge
       WHERE source_node_id IN (${placeholders}) OR target_node_id IN (${placeholders})
       ORDER BY occurrence_count DESC
       LIMIT 1000
-    `).all(...nodeIds, ...nodeIds) as any[]
+    `
+      )
+      .all(...nodeIds, ...nodeIds) as any[]
 
     return rows.map((row) => this.mapEdgeRow(row))
   }
@@ -211,9 +240,13 @@ export class GraphService {
   getStats(): { nodeCount: number; edgeCount: number; nodeTypes: Array<{ type: string; count: number }> } {
     const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM graph_node').get() as any)?.cnt || 0
     const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM graph_edge').get() as any)?.cnt || 0
-    const nodeTypes = this.db.prepare(`
+    const nodeTypes = this.db
+      .prepare(
+        `
       SELECT type, COUNT(*) as count FROM graph_node GROUP BY type ORDER BY count DESC LIMIT 20
-    `).all() as any[]
+    `
+      )
+      .all() as any[]
 
     return { nodeCount, edgeCount, nodeTypes }
   }
@@ -225,12 +258,12 @@ export class GraphService {
       isCoreType: Boolean(row.is_core_type),
       name: row.name,
       displayName: row.display_name || undefined,
-      properties: row.properties ? JSON.parse(row.properties) : {},
+      properties: safeJsonParse(row.properties, {}),
       firstSeenTs: row.first_seen_ts,
       lastSeenTs: row.last_seen_ts,
       occurrenceCount: row.occurrence_count,
-      sourceSessions: row.source_sessions ? JSON.parse(row.source_sessions) : [],
-      sourceMessageRefs: row.source_message_refs ? JSON.parse(row.source_message_refs) : [],
+      sourceSessions: safeJsonParse(row.source_sessions, []),
+      sourceMessageRefs: safeJsonParse(row.source_message_refs, []),
       confidence: row.confidence,
       color: row.color || undefined,
       icon: row.icon || undefined,
@@ -244,11 +277,11 @@ export class GraphService {
       isCoreType: Boolean(row.is_core_type),
       sourceNodeId: row.source_node_id,
       targetNodeId: row.target_node_id,
-      properties: row.properties ? JSON.parse(row.properties) : {},
+      properties: safeJsonParse(row.properties, {}),
       firstSeenTs: row.first_seen_ts,
       lastSeenTs: row.last_seen_ts,
       occurrenceCount: row.occurrence_count,
-      sourceSessions: row.source_sessions ? JSON.parse(row.source_sessions) : [],
+      sourceSessions: safeJsonParse(row.source_sessions, []),
       confidence: row.confidence,
     }
   }

@@ -121,7 +121,14 @@ function buildMsgQueryParams(filter?: { startTs?: number; endTs?: number }, send
   return p
 }
 
-async function browserGetMessagesBefore(sessionId: string, beforeId: number, limit: number, filter?: any, senderId?: number, keywords?: string[]) {
+async function browserGetMessagesBefore(
+  sessionId: string,
+  beforeId: number,
+  limit: number,
+  filter?: any,
+  senderId?: number,
+  keywords?: string[]
+) {
   const baseUrl = getApiServerUrl()
   const p = buildMsgQueryParams(filter, senderId, keywords)
   p.set('limit', String(limit))
@@ -130,7 +137,14 @@ async function browserGetMessagesBefore(sessionId: string, beforeId: number, lim
   return json.data
 }
 
-async function browserGetMessagesAfter(sessionId: string, afterId: number, limit: number, filter?: any, senderId?: number, keywords?: string[]) {
+async function browserGetMessagesAfter(
+  sessionId: string,
+  afterId: number,
+  limit: number,
+  filter?: any,
+  senderId?: number,
+  keywords?: string[]
+) {
   const baseUrl = getApiServerUrl()
   const p = buildMsgQueryParams(filter, senderId, keywords)
   p.set('limit', String(limit))
@@ -148,7 +162,14 @@ async function browserGetMessageContext(sessionId: string, messageId: number, co
   return json.data
 }
 
-async function browserSearchMessages(sessionId: string, keywords: string[], filter?: any, limit = 100, offset = 0, senderId?: number) {
+async function browserSearchMessages(
+  sessionId: string,
+  keywords: string[],
+  filter?: any,
+  limit = 100,
+  offset = 0,
+  senderId?: number
+) {
   const baseUrl = getApiServerUrl()
   const p = buildMsgQueryParams(filter, senderId, keywords)
   p.set('limit', String(limit))

@@ -64,7 +64,7 @@ async function adminRequest(
     return {
       status: response.status,
       data,
-      headers: Object.fromEntries(response.headers.entries())
+      headers: Object.fromEntries(response.headers.entries()),
     }
   } catch (error) {
     console.error(`[Test] Request failed: ${method} ${path}`, error)

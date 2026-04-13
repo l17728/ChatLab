@@ -4,7 +4,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { KnowledgeItem } from '@/electron/main/services/knowledgeService'
+import type { KnowledgeItem } from '@electron/main/services/knowledgeService'
 
 export interface KnowledgeFilter {
   type?: string[]
@@ -18,6 +18,8 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
   const items = ref<KnowledgeItem[]>([])
   const categories = ref<Array<{ category: string; count: number }>>([])
   const loading = ref(false)
+  // 视图状态：'active' = 当前知识库；'archived' = 已归档
+  const viewStatus = ref<'active' | 'archived'>('active')
   const filter = ref<KnowledgeFilter>({
     sortBy: 'helpful',
     sortOrder: 'desc',
@@ -30,10 +32,7 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
    * Layer 3 (partial=1): 至少一个关键词出现
    * 返回带 matchLevel 分数的列表，按分数降序
    */
-  function multiLayerSearch(
-    list: KnowledgeItem[],
-    raw: string
-  ): Array<KnowledgeItem & { matchLevel: number }> {
+  function multiLayerSearch(list: KnowledgeItem[], raw: string): Array<KnowledgeItem & { matchLevel: number }> {
     const text = raw.trim().toLowerCase()
     if (!text) return list.map((i) => ({ ...i, matchLevel: 3 }))
     const words = text.split(/\s+/).filter(Boolean)
@@ -106,7 +105,8 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
   async function loadItems(options?: { type?: string[]; category?: string }) {
     loading.value = true
     try {
-      const result = await window.collabApi?.getKnowledgeItems(options)
+      const mergedOptions = { ...(options || {}), status: viewStatus.value }
+      const result = await window.collabApi?.getKnowledgeItems(mergedOptions as any)
       if (result?.success && result.data) {
         items.value = result.data
       }
@@ -115,6 +115,22 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  async function setViewStatus(status: 'active' | 'archived') {
+    if (viewStatus.value === status) return
+    viewStatus.value = status
+    await loadItems()
+  }
+
+  // 恢复已归档知识条目：改回 active 并从当前(已归档)列表中移除
+  async function restoreItem(itemId: number): Promise<boolean> {
+    const result = await window.collabApi?.updateKnowledgeItem(itemId, { status: 'active' })
+    if (result?.success) {
+      const idx = items.value.findIndex((i) => i.id === itemId)
+      if (idx !== -1) items.value.splice(idx, 1)
+    }
+    return Boolean(result?.success)
   }
 
   async function loadCategories() {
@@ -162,12 +178,15 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     categories,
     loading,
     filter,
+    viewStatus,
     statistics,
     setFilter,
+    setViewStatus,
     loadItems,
     loadCategories,
     markHelpful,
     archiveItem,
+    restoreItem,
     updateItem,
   }
 })

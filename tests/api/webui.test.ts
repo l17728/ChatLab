@@ -351,10 +351,7 @@ describe('WebUI API Tests', () => {
       if (listResponse.data.data.length > 0) {
         context.sessionId = listResponse.data.data[0].id
 
-        const convResponse = await client.createConversation(
-          { sessionId: context.sessionId },
-          validToken
-        )
+        const convResponse = await client.createConversation({ sessionId: context.sessionId }, validToken)
         if (convResponse.data.success) {
           context.conversationId = convResponse.data.data.id
         }
@@ -370,11 +367,7 @@ describe('WebUI API Tests', () => {
       }
 
       console.log('[Test] Sending message')
-      const response = await client.sendMessage(
-        context.conversationId,
-        'Hello, this is a test message!',
-        validToken
-      )
+      const response = await client.sendMessage(context.conversationId, 'Hello, this is a test message!', validToken)
 
       expect(response.status).toBe(200)
       expect(response.data.success).toBe(true)
@@ -555,10 +548,7 @@ describe('WebUI API Integration Test', () => {
     if (sessionId) {
       // 3. Create conversation
       console.log('[Integration Test] Step 3: Create conversation')
-      const convResponse = await client.createConversation(
-        { sessionId, title: 'Integration Test Conv' },
-        token
-      )
+      const convResponse = await client.createConversation({ sessionId, title: 'Integration Test Conv' }, token)
       expect(convResponse.data.success).toBe(true)
       const conversationId = convResponse.data.data.id
 

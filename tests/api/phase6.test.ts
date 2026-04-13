@@ -106,9 +106,7 @@ describe('Phase 6 - Static File Serving', () => {
         enabled: true,
       })
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[Web UI Static] Static root does not exist')
-      )
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[Web UI Static] Static root does not exist'))
 
       consoleSpy.mockRestore()
       await freshServer.close()
@@ -383,9 +381,7 @@ describe('StaticFileConfig', () => {
     const srv = Fastify({ logger: false })
 
     // Should not throw with minimal config (root may not exist → graceful skip)
-    await expect(
-      registerStaticFiles(srv, { enabled: false })
-    ).resolves.not.toThrow()
+    await expect(registerStaticFiles(srv, { enabled: false })).resolves.not.toThrow()
 
     await srv.close()
   })

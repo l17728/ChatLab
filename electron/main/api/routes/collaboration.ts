@@ -18,10 +18,7 @@ import { identityService } from '../../services/identityService'
 async function verifyBearer(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   const auth = request.headers.authorization
   const remoteIp = request.ip
-  const isLocal =
-    remoteIp === '127.0.0.1' ||
-    remoteIp === '::1' ||
-    remoteIp === '::ffff:127.0.0.1'
+  const isLocal = remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1'
 
   if (!auth) {
     if (isLocal) return true // Electron desktop — no token needed
@@ -47,12 +44,13 @@ async function verifyBearer(request: FastifyRequest, reply: FastifyReply): Promi
 
 async function listTasksHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
+    // sessionId 不是 TaskQueryOptions 的已知字段，由下层按需忽略。
+    // 这里只传已定义的字段避免 TS 类型错误。
     const tasks = taskService.queryTasks({
       status: q.status,
       owner: q.owner,
-      sessionId: q.sessionId,
       priority: q.priority,
       limit: q.limit ? Number(q.limit) : undefined,
       offset: q.offset ? Number(q.offset) : undefined,
@@ -61,17 +59,26 @@ async function listTasksHandler(request: FastifyRequest, reply: FastifyReply): P
     })
     return successResponse({ tasks, total: tasks.length })
   } catch (error) {
-    const err = serverError(`Failed to list tasks: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list tasks:', error)
+    const err = serverError('Failed to list tasks')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function createTaskHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.title) {
       const err = invalidFormat('title is required')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.title === 'string' && body.title.length > 500) {
+      const err = invalidFormat('title exceeds maximum length of 500')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.description === 'string' && body.description.length > 5000) {
+      const err = invalidFormat('description exceeds maximum length of 5000')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
     const id = taskService.createTask({
@@ -90,14 +97,15 @@ async function createTaskHandler(request: FastifyRequest, reply: FastifyReply): 
     const task = taskService.getTask(id)
     return reply.code(201).send(successResponse({ task }))
   } catch (error) {
-    const err = serverError(`Failed to create task: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to create task:', error)
+    const err = serverError('Failed to create task')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function getTaskHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid task id')
@@ -110,14 +118,18 @@ async function getTaskHandler(request: FastifyRequest<{ Params: { id: string } }
     }
     return successResponse({ task })
   } catch (error) {
-    const err = serverError(`Failed to get task: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get task:', error)
+    const err = serverError('Failed to get task')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function updateTaskHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function updateTaskHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid task id')
@@ -131,14 +143,18 @@ async function updateTaskHandler(request: FastifyRequest<{ Params: { id: string 
     }
     return successResponse({ task: taskService.getTask(id) })
   } catch (error) {
-    const err = serverError(`Failed to update task: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to update task:', error)
+    const err = serverError('Failed to update task')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function deleteTaskHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function deleteTaskHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid task id')
@@ -151,7 +167,8 @@ async function deleteTaskHandler(request: FastifyRequest<{ Params: { id: string 
     }
     return successResponse({ deleted: true })
   } catch (error) {
-    const err = serverError(`Failed to delete task: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to delete task:', error)
+    const err = serverError('Failed to delete task')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -160,7 +177,7 @@ async function deleteTaskHandler(request: FastifyRequest<{ Params: { id: string 
 
 async function listTodosHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
     const todos = todoService.getTodos({
       globalUserId: q.globalUserId,
@@ -175,17 +192,30 @@ async function listTodosHandler(request: FastifyRequest, reply: FastifyReply): P
     })
     return successResponse({ todos, total: todos.length })
   } catch (error) {
-    const err = serverError(`Failed to list todos: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list todos:', error)
+    const err = serverError('Failed to list todos')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function createTodoHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.title || !body?.globalUserId) {
       const err = invalidFormat('title and globalUserId are required')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.title === 'string' && body.title.length > 500) {
+      const err = invalidFormat('title exceeds maximum length of 500')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.description === 'string' && body.description.length > 5000) {
+      const err = invalidFormat('description exceeds maximum length of 5000')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.notes === 'string' && body.notes.length > 5000) {
+      const err = invalidFormat('notes exceeds maximum length of 5000')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
     const id = todoService.createTodo({
@@ -207,14 +237,15 @@ async function createTodoHandler(request: FastifyRequest, reply: FastifyReply): 
     })
     return reply.code(201).send(successResponse({ todo: todoService.getTodo(id) }))
   } catch (error) {
-    const err = serverError(`Failed to create todo: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to create todo:', error)
+    const err = serverError('Failed to create todo')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function getTodoHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid todo id')
@@ -227,14 +258,18 @@ async function getTodoHandler(request: FastifyRequest<{ Params: { id: string } }
     }
     return successResponse({ todo })
   } catch (error) {
-    const err = serverError(`Failed to get todo: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get todo:', error)
+    const err = serverError('Failed to get todo')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function updateTodoHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function updateTodoHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid todo id')
@@ -248,14 +283,18 @@ async function updateTodoHandler(request: FastifyRequest<{ Params: { id: string 
     }
     return successResponse({ todo: todoService.getTodo(id) })
   } catch (error) {
-    const err = serverError(`Failed to update todo: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to update todo:', error)
+    const err = serverError('Failed to update todo')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function deleteTodoHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function deleteTodoHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid todo id')
@@ -268,7 +307,8 @@ async function deleteTodoHandler(request: FastifyRequest<{ Params: { id: string 
     }
     return successResponse({ deleted: true })
   } catch (error) {
-    const err = serverError(`Failed to delete todo: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to delete todo:', error)
+    const err = serverError('Failed to delete todo')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -277,7 +317,7 @@ async function deleteTodoHandler(request: FastifyRequest<{ Params: { id: string 
 
 async function listFocusHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
     const items = focusService.getFocusItems({
       globalUserId: q.globalUserId,
@@ -288,17 +328,26 @@ async function listFocusHandler(request: FastifyRequest, reply: FastifyReply): P
     })
     return successResponse({ items, total: items.length })
   } catch (error) {
-    const err = serverError(`Failed to list focus items: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list focus items:', error)
+    const err = serverError('Failed to list focus items')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function createFocusHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.title || !body?.globalUserId || !body?.type) {
       const err = invalidFormat('title, globalUserId and type are required')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.title === 'string' && body.title.length > 500) {
+      const err = invalidFormat('title exceeds maximum length of 500')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.description === 'string' && body.description.length > 5000) {
+      const err = invalidFormat('description exceeds maximum length of 5000')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
     const id = focusService.createFocusItem({
@@ -316,14 +365,18 @@ async function createFocusHandler(request: FastifyRequest, reply: FastifyReply):
     const item = items.find((i) => i.id === id) || null
     return reply.code(201).send(successResponse({ item }))
   } catch (error) {
-    const err = serverError(`Failed to create focus item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to create focus item:', error)
+    const err = serverError('Failed to create focus item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function updateFocusHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function updateFocusHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid focus item id')
@@ -337,14 +390,18 @@ async function updateFocusHandler(request: FastifyRequest<{ Params: { id: string
     }
     return successResponse({ updated: true })
   } catch (error) {
-    const err = serverError(`Failed to update focus item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to update focus item:', error)
+    const err = serverError('Failed to update focus item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function archiveFocusHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function archiveFocusHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid focus item id')
@@ -357,7 +414,8 @@ async function archiveFocusHandler(request: FastifyRequest<{ Params: { id: strin
     }
     return successResponse({ archived: true })
   } catch (error) {
-    const err = serverError(`Failed to archive focus item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to archive focus item:', error)
+    const err = serverError('Failed to archive focus item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -366,7 +424,7 @@ async function archiveFocusHandler(request: FastifyRequest<{ Params: { id: strin
 
 async function listKnowledgeHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
     const items = knowledgeService.queryItems({
       type: q.type,
@@ -381,17 +439,30 @@ async function listKnowledgeHandler(request: FastifyRequest, reply: FastifyReply
     })
     return successResponse({ items, total: items.length })
   } catch (error) {
-    const err = serverError(`Failed to list knowledge items: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list knowledge items:', error)
+    const err = serverError('Failed to list knowledge items')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function createKnowledgeHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.title || !body?.content || !body?.type) {
       const err = invalidFormat('title, content and type are required')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.title === 'string' && body.title.length > 500) {
+      const err = invalidFormat('title exceeds maximum length of 500')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.content === 'string' && body.content.length > 50000) {
+      const err = invalidFormat('content exceeds maximum length of 50000')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.summary === 'string' && body.summary.length > 5000) {
+      const err = invalidFormat('summary exceeds maximum length of 5000')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
     const id = knowledgeService.createItem({
@@ -410,14 +481,18 @@ async function createKnowledgeHandler(request: FastifyRequest, reply: FastifyRep
     })
     return reply.code(201).send(successResponse({ item: knowledgeService.getItem(id) }))
   } catch (error) {
-    const err = serverError(`Failed to create knowledge item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to create knowledge item:', error)
+    const err = serverError('Failed to create knowledge item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function getKnowledgeHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function getKnowledgeHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid knowledge item id')
@@ -431,14 +506,18 @@ async function getKnowledgeHandler(request: FastifyRequest<{ Params: { id: strin
     knowledgeService.incrementViewCount(id)
     return successResponse({ item })
   } catch (error) {
-    const err = serverError(`Failed to get knowledge item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get knowledge item:', error)
+    const err = serverError('Failed to get knowledge item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function updateKnowledgeHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function updateKnowledgeHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid knowledge item id')
@@ -452,14 +531,18 @@ async function updateKnowledgeHandler(request: FastifyRequest<{ Params: { id: st
     }
     return successResponse({ item: knowledgeService.getItem(id) })
   } catch (error) {
-    const err = serverError(`Failed to update knowledge item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to update knowledge item:', error)
+    const err = serverError('Failed to update knowledge item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function archiveKnowledgeHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function archiveKnowledgeHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid knowledge item id')
@@ -472,25 +555,30 @@ async function archiveKnowledgeHandler(request: FastifyRequest<{ Params: { id: s
     }
     return successResponse({ archived: true })
   } catch (error) {
-    const err = serverError(`Failed to archive knowledge item: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to archive knowledge item:', error)
+    const err = serverError('Failed to archive knowledge item')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function getKnowledgeCategoriesHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const categories = knowledgeService.getCategories()
     return successResponse({ categories })
   } catch (error) {
-    const err = serverError(`Failed to get categories: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get categories:', error)
+    const err = serverError('Failed to get categories')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
-async function markKnowledgeHelpfulHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<any> {
+async function markKnowledgeHelpfulHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const id = Number(request.params.id)
     if (isNaN(id)) {
       const err = invalidFormat('Invalid knowledge item id')
@@ -499,7 +587,8 @@ async function markKnowledgeHelpfulHandler(request: FastifyRequest<{ Params: { i
     knowledgeService.incrementHelpfulCount(id)
     return successResponse({ marked: true })
   } catch (error) {
-    const err = serverError(`Failed to mark helpful: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to mark helpful:', error)
+    const err = serverError('Failed to mark helpful')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -508,7 +597,7 @@ async function markKnowledgeHelpfulHandler(request: FastifyRequest<{ Params: { i
 
 async function listGraphNodesHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
     const nodes = graphService.queryNodes({
       types: q.types ? (Array.isArray(q.types) ? q.types : [q.types]) : undefined,
@@ -519,17 +608,26 @@ async function listGraphNodesHandler(request: FastifyRequest, reply: FastifyRepl
     })
     return successResponse({ nodes, total: nodes.length })
   } catch (error) {
-    const err = serverError(`Failed to list graph nodes: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list graph nodes:', error)
+    const err = serverError('Failed to list graph nodes')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function upsertGraphNodeHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.type || !body?.name) {
       const err = invalidFormat('type and name are required')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.name === 'string' && body.name.length > 500) {
+      const err = invalidFormat('name exceeds maximum length of 500')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+    if (typeof body.displayName === 'string' && body.displayName.length > 500) {
+      const err = invalidFormat('displayName exceeds maximum length of 500')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
     const now = Date.now()
@@ -549,29 +647,29 @@ async function upsertGraphNodeHandler(request: FastifyRequest, reply: FastifyRep
     })
     return reply.code(201).send(successResponse({ id }))
   } catch (error) {
-    const err = serverError(`Failed to upsert graph node: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to upsert graph node:', error)
+    const err = serverError('Failed to upsert graph node')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function listGraphEdgesHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
-    const nodeIds = q.nodeIds
-      ? (Array.isArray(q.nodeIds) ? q.nodeIds : [q.nodeIds]).map(Number)
-      : []
+    const nodeIds = q.nodeIds ? (Array.isArray(q.nodeIds) ? q.nodeIds : [q.nodeIds]).map(Number) : []
     const edges = graphService.queryEdges(nodeIds)
     return successResponse({ edges, total: edges.length })
   } catch (error) {
-    const err = serverError(`Failed to list graph edges: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to list graph edges:', error)
+    const err = serverError('Failed to list graph edges')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function upsertGraphEdgeHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.type || body?.sourceNodeId === undefined || body?.targetNodeId === undefined) {
       const err = invalidFormat('type, sourceNodeId and targetNodeId are required')
@@ -591,18 +689,20 @@ async function upsertGraphEdgeHandler(request: FastifyRequest, reply: FastifyRep
     })
     return reply.code(201).send(successResponse({ id }))
   } catch (error) {
-    const err = serverError(`Failed to upsert graph edge: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to upsert graph edge:', error)
+    const err = serverError('Failed to upsert graph edge')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function getGraphStatsHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const stats = graphService.getStats()
     return successResponse(stats)
   } catch (error) {
-    const err = serverError(`Failed to get graph stats: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get graph stats:', error)
+    const err = serverError('Failed to get graph stats')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -611,7 +711,7 @@ async function getGraphStatsHandler(request: FastifyRequest, reply: FastifyReply
 
 async function matchIdentityHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.sessionId || !body?.member) {
       const err = invalidFormat('sessionId and member are required')
@@ -625,34 +725,32 @@ async function matchIdentityHandler(request: FastifyRequest, reply: FastifyReply
     )
     return successResponse(result)
   } catch (error) {
-    const err = serverError(`Failed to match identity: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to match identity:', error)
+    const err = serverError('Failed to match identity')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function confirmIdentityHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const body = request.body as any
     if (!body?.sessionId || body?.memberId === undefined || !body?.displayName) {
       const err = invalidFormat('sessionId, memberId and displayName are required')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
-    const globalUserId = await identityService.confirmIdentity(
-      body.sessionId,
-      body.memberId,
-      body.displayName
-    )
+    const globalUserId = await identityService.confirmIdentity(body.sessionId, body.memberId, body.displayName)
     return successResponse({ globalUserId })
   } catch (error) {
-    const err = serverError(`Failed to confirm identity: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to confirm identity:', error)
+    const err = serverError('Failed to confirm identity')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
 
 async function getMemberCandidatesHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
-    if (!await verifyBearer(request, reply)) return
+    if (!(await verifyBearer(request, reply))) return
     const q = request.query as any
     if (!q.sessionId || q.memberId === undefined) {
       const err = invalidFormat('sessionId and memberId are required')
@@ -665,7 +763,8 @@ async function getMemberCandidatesHandler(request: FastifyRequest, reply: Fastif
     )
     return successResponse({ candidates })
   } catch (error) {
-    const err = serverError(`Failed to get candidates: ${error instanceof Error ? error.message : String(error)}`)
+    console.error('[WebUI API] Failed to get candidates:', error)
+    const err = serverError('Failed to get candidates')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -693,16 +792,36 @@ export function registerCollaborationRoutes(server: FastifyInstance): void {
   server.get('/api/v1/collaboration/focus', { logLevel: 'warn' }, listFocusHandler)
   server.post('/api/v1/collaboration/focus', { logLevel: 'warn' }, createFocusHandler)
   server.put<{ Params: { id: string } }>('/api/v1/collaboration/focus/:id', { logLevel: 'warn' }, updateFocusHandler)
-  server.delete<{ Params: { id: string } }>('/api/v1/collaboration/focus/:id', { logLevel: 'warn' }, archiveFocusHandler)
+  server.delete<{ Params: { id: string } }>(
+    '/api/v1/collaboration/focus/:id',
+    { logLevel: 'warn' },
+    archiveFocusHandler
+  )
 
   // Knowledge
   server.get('/api/v1/collaboration/knowledge', { logLevel: 'warn' }, listKnowledgeHandler)
   server.post('/api/v1/collaboration/knowledge', { logLevel: 'warn' }, createKnowledgeHandler)
   server.get('/api/v1/collaboration/knowledge/categories', { logLevel: 'warn' }, getKnowledgeCategoriesHandler)
-  server.get<{ Params: { id: string } }>('/api/v1/collaboration/knowledge/:id', { logLevel: 'warn' }, getKnowledgeHandler)
-  server.put<{ Params: { id: string } }>('/api/v1/collaboration/knowledge/:id', { logLevel: 'warn' }, updateKnowledgeHandler)
-  server.delete<{ Params: { id: string } }>('/api/v1/collaboration/knowledge/:id', { logLevel: 'warn' }, archiveKnowledgeHandler)
-  server.post<{ Params: { id: string } }>('/api/v1/collaboration/knowledge/:id/helpful', { logLevel: 'warn' }, markKnowledgeHelpfulHandler)
+  server.get<{ Params: { id: string } }>(
+    '/api/v1/collaboration/knowledge/:id',
+    { logLevel: 'warn' },
+    getKnowledgeHandler
+  )
+  server.put<{ Params: { id: string } }>(
+    '/api/v1/collaboration/knowledge/:id',
+    { logLevel: 'warn' },
+    updateKnowledgeHandler
+  )
+  server.delete<{ Params: { id: string } }>(
+    '/api/v1/collaboration/knowledge/:id',
+    { logLevel: 'warn' },
+    archiveKnowledgeHandler
+  )
+  server.post<{ Params: { id: string } }>(
+    '/api/v1/collaboration/knowledge/:id/helpful',
+    { logLevel: 'warn' },
+    markKnowledgeHelpfulHandler
+  )
 
   // Graph
   server.get('/api/v1/collaboration/graph/nodes', { logLevel: 'warn' }, listGraphNodesHandler)

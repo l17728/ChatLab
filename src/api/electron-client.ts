@@ -8,9 +8,9 @@ import type {
   AuthCredentials,
   AuthResponse,
   LogoutResponse,
-  AnalysisSession,
   ListSessionsResponse,
   GetSessionResponse,
+  DeleteSessionResponse,
   CreateConversationRequest,
   CreateConversationResponse,
   ListConversationsResponse,
@@ -27,14 +27,11 @@ import type {
  * Delegates to native window.chatApi and window.aiApi objects
  */
 export class ElectronClient implements IApiClient {
-  private token: string | null = null
-  private tokenExpiresAt: number = 0
-
   /**
    * Login - Not supported via IPC, returns error
    * Authentication in Electron is handled differently (native auth system)
    */
-  async login(credentials: AuthCredentials): Promise<AuthResponse> {
+  async login(_credentials: AuthCredentials): Promise<AuthResponse> {
     console.warn('[ElectronClient] Login is not supported in Electron mode')
     return {
       success: false,
@@ -46,8 +43,6 @@ export class ElectronClient implements IApiClient {
    * Logout - Not applicable in Electron mode
    */
   async logout(): Promise<LogoutResponse> {
-    this.token = null
-    this.tokenExpiresAt = 0
     return { success: true }
   }
 
@@ -66,19 +61,17 @@ export class ElectronClient implements IApiClient {
   }
 
   /**
-   * Set token - Stored for reference, not used in IPC mode
+   * Set token - No-op in Electron (IPC mode does not use tokens)
    */
-  setToken(token: string, expiresAt: number): void {
-    this.token = token
-    this.tokenExpiresAt = expiresAt
+  setToken(_token: string, _expiresAt: number): void {
+    // No-op
   }
 
   /**
-   * Clear token
+   * Clear token - No-op in Electron
    */
   clearToken(): void {
-    this.token = null
-    this.tokenExpiresAt = 0
+    // No-op
   }
 
   /**
@@ -130,6 +123,29 @@ export class ElectronClient implements IApiClient {
       return {
         success: false,
         error: `Failed to get session: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
+
+  /**
+   * Delete an analysis session
+   */
+  async deleteSession(sessionId: string): Promise<DeleteSessionResponse> {
+    try {
+      const chatApi = (window as any).chatApi
+      if (!chatApi?.deleteSession) {
+        return {
+          success: false,
+          error: 'chatApi is not available in window context',
+        }
+      }
+
+      const result = await chatApi.deleteSession(sessionId)
+      return { success: !!result }
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
       }
     }
   }

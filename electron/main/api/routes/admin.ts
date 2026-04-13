@@ -7,6 +7,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as apiServer from '../index'
 import * as userDb from '../user-db'
+import { verifyToken } from '../auth-db'
 import { successResponse, errorResponse, ApiError, ApiErrorCode, serverError, invalidFormat } from '../errors'
 
 // ==================== Types ====================
@@ -31,11 +32,7 @@ export interface AdminUser {
 /**
  * Log administrative operation
  */
-function logAdminOperation(
-  operation: string,
-  username: string,
-  details?: Record<string, any>
-): void {
+function logAdminOperation(operation: string, username: string, details?: Record<string, any>): void {
   const timestamp = new Date().toISOString()
   console.log(`[WebUI Admin] [${timestamp}] ${operation} - User: ${username}`, details || '')
 }
@@ -53,14 +50,15 @@ async function verifyAdminAuth(
     return { valid: false }
   }
 
-  void authHeader.slice(7) // token extracted but admin role check not yet implemented
+  const token = authHeader.slice(7)
+  const result = verifyToken(token)
+  if (!result.valid) {
+    console.warn('[WebUI Admin] Token verification failed')
+    return { valid: false }
+  }
 
-  // TODO: Verify this is an admin user
-  // For now, accept any valid token
-  // In production, check user roles/permissions
-
-  console.log('[WebUI Admin] Admin token verified')
-  return { valid: true }
+  console.log(`[WebUI Admin] Admin token verified for user: ${result.username}`)
+  return { valid: true, userId: result.userId, username: result.username }
 }
 
 // ==================== API Server Management Routes ====================
@@ -69,10 +67,7 @@ async function verifyAdminAuth(
  * GET /api/webui/admin/server/status
  * Get current API server status
  */
-export async function getServerStatusHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+export async function getServerStatusHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
@@ -101,9 +96,7 @@ export async function getServerStatusHandler(
     })
   } catch (error) {
     console.error('[WebUI Admin] Error getting server status:', error)
-    const err = serverError(
-      `Failed to get server status: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to get server status')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -112,10 +105,7 @@ export async function getServerStatusHandler(
  * POST /api/webui/admin/server/enable
  * Enable API server
  */
-export async function enableServerHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+export async function enableServerHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
@@ -135,9 +125,7 @@ export async function enableServerHandler(
     return successResponse(status)
   } catch (error) {
     console.error('[WebUI Admin] Error enabling server:', error)
-    const err = serverError(
-      `Failed to enable server: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to enable server')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -146,10 +134,7 @@ export async function enableServerHandler(
  * POST /api/webui/admin/server/disable
  * Disable API server
  */
-export async function disableServerHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+export async function disableServerHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
@@ -168,9 +153,7 @@ export async function disableServerHandler(
     return successResponse(status)
   } catch (error) {
     console.error('[WebUI Admin] Error disabling server:', error)
-    const err = serverError(
-      `Failed to disable server: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to disable server')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -192,9 +175,9 @@ export async function changePortHandler(
 
     const { port } = request.body
 
-    if (!port || port < 1024 || port > 65535) {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1024 || port > 65535) {
       console.warn('[WebUI Admin] Invalid port number:', port)
-      const err = invalidFormat('Port must be between 1024 and 65535')
+      const err = invalidFormat('Port must be an integer between 1024 and 65535')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
@@ -210,9 +193,7 @@ export async function changePortHandler(
     return successResponse(status)
   } catch (error) {
     console.error('[WebUI Admin] Error changing port:', error)
-    const err = serverError(
-      `Failed to change port: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to change port')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -223,10 +204,7 @@ export async function changePortHandler(
  * GET /api/webui/admin/users
  * List all users
  */
-export async function listUsersHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+export async function listUsersHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
@@ -240,7 +218,7 @@ export async function listUsersHandler(
     const stats = userDb.getUserStatistics()
 
     // Remove sensitive fields
-    const safeUsers = users.map(u => ({
+    const safeUsers = users.map((u) => ({
       id: u.id,
       username: u.username,
       isActive: u.isActive,
@@ -259,9 +237,7 @@ export async function listUsersHandler(
     })
   } catch (error) {
     console.error('[WebUI Admin] Error listing users:', error)
-    const err = serverError(
-      `Failed to list users: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to list users')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -283,7 +259,7 @@ export async function disableUserHandler(
 
     const { username } = request.body
 
-    if (!username) {
+    if (!username || typeof username !== 'string') {
       const err = invalidFormat('Username is required')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
@@ -308,9 +284,7 @@ export async function disableUserHandler(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI Admin] Error disabling user:', error)
-    const err = serverError(
-      `Failed to disable user: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to disable user')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -332,7 +306,7 @@ export async function enableUserHandler(
 
     const { username } = request.body
 
-    if (!username) {
+    if (!username || typeof username !== 'string') {
       const err = invalidFormat('Username is required')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
@@ -357,9 +331,7 @@ export async function enableUserHandler(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI Admin] Error enabling user:', error)
-    const err = serverError(
-      `Failed to enable user: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to enable user')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -381,7 +353,7 @@ export async function deleteUserHandler(
 
     const { username } = request.body
 
-    if (!username) {
+    if (!username || typeof username !== 'string') {
       const err = invalidFormat('Username is required')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
@@ -413,9 +385,7 @@ export async function deleteUserHandler(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI Admin] Error deleting user:', error)
-    const err = serverError(
-      `Failed to delete user: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to delete user')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -437,13 +407,18 @@ export async function resetPasswordHandler(
 
     const { username, newPassword } = request.body
 
-    if (!username || !newPassword) {
+    if (!username || typeof username !== 'string' || !newPassword || typeof newPassword !== 'string') {
       const err = invalidFormat('Username and new password are required')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
     if (newPassword.length < 6) {
       const err = invalidFormat('Password must be at least 6 characters')
+      return reply.code(err.statusCode).send(errorResponse(err))
+    }
+
+    if (newPassword.length > 200) {
+      const err = invalidFormat('Password exceeds maximum length')
       return reply.code(err.statusCode).send(errorResponse(err))
     }
 
@@ -458,10 +433,12 @@ export async function resetPasswordHandler(
       return reply.code(400).send(errorResponse(err))
     }
 
-    // Reset password (use a dummy old password since we're admin)
-    const { hash: _hash, salt: _salt } = userDb.hashPassword(newPassword)
-    // Direct database update would go here in a real implementation
-    // For now, we'll use the normal update mechanism with a workaround
+    // Force reset password (admin bypass - no old password needed)
+    const resetResult = userDb.forceResetPassword(username, newPassword)
+    if (!resetResult.success) {
+      const err = new ApiError(ApiErrorCode.INVALID_FORMAT, resetResult.error || 'Password reset failed')
+      return reply.code(400).send(errorResponse(err))
+    }
 
     logAdminOperation('RESET_PASSWORD_SUCCESS', verification.username || 'unknown', {
       targetUser: username,
@@ -470,9 +447,7 @@ export async function resetPasswordHandler(
     return successResponse({ success: true })
   } catch (error) {
     console.error('[WebUI Admin] Error resetting password:', error)
-    const err = serverError(
-      `Failed to reset password: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to reset password')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -481,10 +456,7 @@ export async function resetPasswordHandler(
  * GET /api/webui/admin/statistics
  * Get system statistics
  */
-export async function getStatisticsHandler(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<any> {
+export async function getStatisticsHandler(request: FastifyRequest, reply: FastifyReply): Promise<any> {
   try {
     const verification = await verifyAdminAuth(request, reply)
     if (!verification.valid) {
@@ -513,9 +485,7 @@ export async function getStatisticsHandler(
     })
   } catch (error) {
     console.error('[WebUI Admin] Error getting statistics:', error)
-    const err = serverError(
-      `Failed to get statistics: ${error instanceof Error ? error.message : String(error)}`
-    )
+    const err = serverError('Failed to get statistics')
     return reply.code(err.statusCode).send(errorResponse(err))
   }
 }
@@ -529,11 +499,7 @@ export function registerAdminRoutes(server: FastifyInstance): void {
   server.get('/api/webui/admin/server/status', { logLevel: 'warn' }, getServerStatusHandler)
   server.post('/api/webui/admin/server/enable', { logLevel: 'warn' }, enableServerHandler)
   server.post('/api/webui/admin/server/disable', { logLevel: 'warn' }, disableServerHandler)
-  server.post<{ Body: { port: number } }>(
-    '/api/webui/admin/server/port',
-    { logLevel: 'warn' },
-    changePortHandler
-  )
+  server.post<{ Body: { port: number } }>('/api/webui/admin/server/port', { logLevel: 'warn' }, changePortHandler)
 
   // User management
   server.get('/api/webui/admin/users', { logLevel: 'warn' }, listUsersHandler)
@@ -542,16 +508,8 @@ export function registerAdminRoutes(server: FastifyInstance): void {
     { logLevel: 'warn' },
     disableUserHandler
   )
-  server.post<{ Body: { username: string } }>(
-    '/api/webui/admin/users/enable',
-    { logLevel: 'warn' },
-    enableUserHandler
-  )
-  server.post<{ Body: { username: string } }>(
-    '/api/webui/admin/users/delete',
-    { logLevel: 'warn' },
-    deleteUserHandler
-  )
+  server.post<{ Body: { username: string } }>('/api/webui/admin/users/enable', { logLevel: 'warn' }, enableUserHandler)
+  server.post<{ Body: { username: string } }>('/api/webui/admin/users/delete', { logLevel: 'warn' }, deleteUserHandler)
   server.post<{ Body: { username: string; newPassword: string } }>(
     '/api/webui/admin/users/reset-password',
     { logLevel: 'warn' },

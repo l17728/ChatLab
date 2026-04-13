@@ -4,13 +4,15 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { GraphNode, GraphEdge } from '@/electron/main/services/graphService'
+import type { GraphNode, GraphEdge } from '@electron/main/services/graphService'
 
 export const useGraphStore = defineStore('graph', () => {
   const nodes = ref<GraphNode[]>([])
   const edges = ref<GraphEdge[]>([])
   const loading = ref(false)
-  const stats = ref<{ nodeCount: number; edgeCount: number; nodeTypes: Array<{ type: string; count: number }> } | null>(null)
+  const stats = ref<{ nodeCount: number; edgeCount: number; nodeTypes: Array<{ type: string; count: number }> } | null>(
+    null
+  )
 
   // 选中的节点类型过滤
   const selectedTypes = ref<string[]>([])
@@ -37,9 +39,7 @@ export const useGraphStore = defineStore('graph', () => {
 
   const filteredEdges = computed(() =>
     edges.value.filter(
-      (e) =>
-        filteredNodeIds.value.includes(e.sourceNodeId) &&
-        filteredNodeIds.value.includes(e.targetNodeId)
+      (e) => filteredNodeIds.value.includes(e.sourceNodeId) && filteredNodeIds.value.includes(e.targetNodeId)
     )
   )
 

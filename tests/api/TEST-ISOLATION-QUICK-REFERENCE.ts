@@ -39,11 +39,11 @@ function resetDatabase(): void {
 // 3. 应用隔离
 describe('Phase X: Isolated Test Suite', () => {
   beforeEach(() => {
-    resetDatabase()  // 每个测试前清理
+    resetDatabase() // 每个测试前清理
   })
 
   afterEach(() => {
-    resetDatabase()  // 每个测试后清理
+    resetDatabase() // 每个测试后清理
   })
 
   it('should have clean state', () => {
@@ -115,7 +115,7 @@ describe('Phase 4: HTTP Isolated', () => {
   let token: string
 
   beforeEach(async () => {
-    resetDatabase()  // 还原数据库
+    resetDatabase() // 还原数据库
 
     // 每个测试获得新 token
     const response = await fetch('http://localhost:9871/api/webui/auth/login', {
@@ -129,7 +129,7 @@ describe('Phase 4: HTTP Isolated', () => {
 
   afterEach(() => {
     resetDatabase()
-    token = ''  // 清理 token
+    token = '' // 清理 token
   })
 
   it('should have fresh auth state', async () => {
@@ -212,7 +212,7 @@ describe('Good: With Isolation', () => {
 // ❌ 错误 2: 清理中抛出异常
 describe('Bad: Cleanup Throws', () => {
   afterEach(() => {
-    fs.rmSync('/tmp/test')  // ❌ 如果目录不存在就崩溃
+    fs.rmSync('/tmp/test') // ❌ 如果目录不存在就崩溃
   })
 })
 
@@ -220,7 +220,7 @@ describe('Bad: Cleanup Throws', () => {
 describe('Good: Safe Cleanup', () => {
   afterEach(() => {
     try {
-      fs.rmSync('/tmp/test', { recursive: true, force: true })  // ✅ force: true 忽略不存在的目录
+      fs.rmSync('/tmp/test', { recursive: true, force: true }) // ✅ force: true 忽略不存在的目录
     } catch (e) {
       // 记录但不抛出
       console.warn('Cleanup warning:', e.message)
@@ -233,39 +233,39 @@ describe('Good: Safe Cleanup', () => {
 // ❌ 错误 3: 只在 beforeAll 清理
 describe('Bad: Only beforeAll Cleanup', () => {
   beforeAll(() => {
-    resetDatabase()  // ❌ 只在测试套件开始时清理
+    resetDatabase() // ❌ 只在测试套件开始时清理
   })
 
   it('test 1', () => {
-    userDb.createUser('user1')  // 创建了用户
+    userDb.createUser('user1') // 创建了用户
   })
 
   it('test 2', () => {
     // user1 仍然在数据库中！污染了状态
     const users = userDb.listUsers()
-    expect(users.length).toBe(1)  // 可能失败
+    expect(users.length).toBe(1) // 可能失败
   })
 })
 
 // ✅ 改正: beforeEach 和 afterEach
 describe('Good: Complete Cleanup', () => {
   beforeEach(() => {
-    resetDatabase()  // ✅ 每个测试前清理
+    resetDatabase() // ✅ 每个测试前清理
   })
 
   afterEach(() => {
-    resetDatabase()  // ✅ 每个测试后清理
+    resetDatabase() // ✅ 每个测试后清理
   })
 
   it('test 1', () => {
-    userDb.createUser('user1')  // 创建用户
+    userDb.createUser('user1') // 创建用户
     expect(userDb.listUsers().length).toBe(1)
   })
 
   it('test 2', () => {
     // 数据库被清理了
     const users = userDb.listUsers()
-    expect(users.length).toBe(0)  // ✅ 通过
+    expect(users.length).toBe(0) // ✅ 通过
   })
 })
 

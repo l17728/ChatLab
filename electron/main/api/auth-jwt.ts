@@ -4,7 +4,7 @@
  * Logs all authentication events
  */
 
-import { randomBytes } from 'crypto'
+import { randomBytes, timingSafeEqual, createHmac } from 'crypto'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import * as fs from 'fs-extra'
 import * as path from 'path'
@@ -41,6 +41,36 @@ const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000 // 15 minutes
 
 const authState: AuthState = {
   lastAttempts: new Map(),
+}
+
+// HMAC signing secret — generated once per install and persisted in auth config
+let _jwtSecret: string | null = null
+
+export function getJwtSecret(): string {
+  if (_jwtSecret) return _jwtSecret
+  try {
+    const configPath = getAuthConfigPath()
+    if (fs.existsSync(configPath)) {
+      const data = fs.readJsonSync(configPath)
+      if (typeof data.jwtSecret === 'string' && data.jwtSecret.length >= 64) {
+        _jwtSecret = data.jwtSecret as string
+        return _jwtSecret
+      }
+    }
+  } catch {
+    /* fall through to generate */
+  }
+  // Generate and persist new secret
+  const secret = randomBytes(48).toString('hex') // 96 hex chars = 384 bits
+  _jwtSecret = secret
+  try {
+    const configPath = getAuthConfigPath()
+    const existing = fs.existsSync(configPath) ? fs.readJsonSync(configPath) : {}
+    fs.writeJsonSync(configPath, { ...existing, jwtSecret: secret }, { spaces: 2 })
+  } catch (err) {
+    console.error('[WebUI Auth] Failed to persist JWT secret:', err)
+  }
+  return secret
 }
 
 /**
@@ -129,14 +159,11 @@ function recordFailedLoginAttempt(username: string): void {
     attempts.count++
   }
 
-  console.warn(
-    `[WebUI Auth] Failed login attempt for ${username} (${attempts?.count || 1}/${MAX_LOGIN_ATTEMPTS})`
-  )
+  console.warn(`[WebUI Auth] Failed login attempt for ${username} (${attempts?.count || 1}/${MAX_LOGIN_ATTEMPTS})`)
 }
 
 /**
- * Generate JWT token (simplified, no external JWT library)
- * In production, use 'jsonwebtoken' library for proper JWT support
+ * Generate HMAC-signed JWT token
  */
 function generateToken(): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
@@ -145,20 +172,31 @@ function generateToken(): string {
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor((Date.now() + TOKEN_EXPIRY_MS) / 1000),
       type: 'webui',
+      jti: randomBytes(16).toString('hex'), // unique token ID prevents replay of expired tokens
     })
   ).toString('base64url')
-  const signature = randomBytes(32).toString('base64url')
-
-  return `${header}.${payload}.${signature}`
+  const signingInput = `${header}.${payload}`
+  const signature = createHmac('sha256', getJwtSecret()).update(signingInput).digest('base64url')
+  return `${signingInput}.${signature}`
 }
 
 /**
- * Parse and validate token
+ * Parse and validate HMAC-signed token
  */
 function validateToken(token: string): { valid: boolean; exp?: number } {
   try {
     const parts = token.split('.')
     if (parts.length !== 3) {
+      return { valid: false }
+    }
+
+    // Verify HMAC signature
+    const signingInput = `${parts[0]}.${parts[1]}`
+    const expectedSig = createHmac('sha256', getJwtSecret()).update(signingInput).digest('base64url')
+    const expectedBuf = Buffer.from(expectedSig)
+    const actualBuf = Buffer.from(parts[2])
+    if (expectedBuf.length !== actualBuf.length || !timingSafeEqual(expectedBuf, actualBuf)) {
+      console.warn('[WebUI Auth] Token signature verification failed')
       return { valid: false }
     }
 
@@ -211,7 +249,10 @@ export async function handleLogin(request: LoginRequest): Promise<LoginResponse>
     }
   }
 
-  if (config.username !== username || config.password !== password) {
+  // Use timing-safe comparison to prevent side-channel brute-force attacks
+  const usernameMatch = timingSafeEqual(Buffer.from(config.username), Buffer.from(username))
+  const passwordMatch = timingSafeEqual(Buffer.from(config.password), Buffer.from(password))
+  if (!usernameMatch || !passwordMatch) {
     console.warn(`[WebUI Auth] Invalid credentials for user: ${username}`)
     recordFailedLoginAttempt(username)
     return {
@@ -224,8 +265,9 @@ export async function handleLogin(request: LoginRequest): Promise<LoginResponse>
   const token = generateToken()
   const expiresAt = Date.now() + TOKEN_EXPIRY_MS
 
-  console.log(`[WebUI Auth] Login successful for user: ${username}. Token expires at ${new Date(expiresAt).toISOString()}`)
-  console.log(`[WebUI Auth] Login credentials: username=${username}`)
+  console.log(
+    `[WebUI Auth] Login successful for user: ${username}. Token expires at ${new Date(expiresAt).toISOString()}`
+  )
 
   // Clear login attempts on success
   authState.lastAttempts.delete(username)
@@ -262,10 +304,7 @@ export function verifyAuthToken(token: string): { valid: boolean; message?: stri
 /**
  * Middleware to verify JWT token from request
  */
-export async function jwtAuthMiddleware(
-  request: FastifyRequest,
-  _reply: FastifyReply
-): Promise<boolean> {
+export async function jwtAuthMiddleware(request: FastifyRequest, _reply: FastifyReply): Promise<boolean> {
   const authHeader = request.headers.authorization
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     console.warn('[WebUI Auth] Missing or invalid authorization header')
@@ -306,5 +345,7 @@ export function updateAuthCredentials(username: string, password: string): void 
  * Log authentication event
  */
 export function logAuthEvent(event: string, details: Record<string, any>): void {
-  console.log(`[WebUI Auth Event] ${event}:`, details)
+  // Strip any sensitive fields before logging
+  const { token: _t, password: _p, secret: _s, authorization: _a, ...safeDetails } = details
+  console.log(`[WebUI Auth Event] ${event}:`, safeDetails)
 }

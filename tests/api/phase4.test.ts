@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 
 describe('Phase 4: Admin Management API', () => {
   let adminToken: string
-  let testBaseURL = 'http://127.0.0.1:9871'
+  const testBaseURL = 'http://127.0.0.1:9871'
 
   /**
    * Test HTTP request helper

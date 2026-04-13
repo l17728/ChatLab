@@ -8,6 +8,15 @@ import { randomUUID } from 'crypto'
 import Database from 'better-sqlite3'
 import { getGlobalDb } from './index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export type JobType = 'tasks' | 'knowledge_graph' | 'faq' | 'graph' | 'focus' | 'all'
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -115,9 +124,7 @@ export class ExtractionJobService {
    * 获取任务
    */
   getJob(jobId: string): ExtractionJob | null {
-    const row = this.db
-      .prepare('SELECT * FROM extraction_job WHERE id = ?')
-      .get(jobId) as any
+    const row = this.db.prepare('SELECT * FROM extraction_job WHERE id = ?').get(jobId) as any
 
     if (!row) return null
     return this.parseRow(row)
@@ -221,12 +228,14 @@ export class ExtractionJobService {
    */
   getFailedJobs(limit: number = 10): ExtractionJob[] {
     const rows = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT * FROM extraction_job
         WHERE status = 'failed' AND retry_count < max_retries
         ORDER BY created_at ASC
         LIMIT ?
-      `)
+      `
+      )
       .all(limit) as any[]
 
     return rows.map((row) => this.parseRow(row))
@@ -253,11 +262,23 @@ export class ExtractionJobService {
     const ids = jobsToDelete.map((row) => row.id)
     const placeholders = ids.map(() => '?').join(',')
 
-    const result = this.db
-      .prepare(`DELETE FROM extraction_job WHERE id IN (${placeholders})`)
-      .run(...ids)
+    const result = this.db.prepare(`DELETE FROM extraction_job WHERE id IN (${placeholders})`).run(...ids)
 
     return result.changes
+  }
+
+  /**
+   * 获取某会话某类型的最近一次成功任务，用于增量分析
+   */
+  getLatestDoneJob(sessionId: string, jobType: JobType): ExtractionJob | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM extraction_job
+         WHERE session_id = ? AND job_type = ? AND status = 'done'
+         ORDER BY finished_at DESC LIMIT 1`
+      )
+      .get(sessionId, jobType) as ExtractionJob | undefined
+    return row ? this.parseRow(row) : null
   }
 
   /**
@@ -278,8 +299,8 @@ export class ExtractionJobService {
       errorDetail: row.error_detail,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
-      configSnapshot: row.config_snapshot ? JSON.parse(row.config_snapshot) : undefined,
-      resultSummary: row.result_summary ? JSON.parse(row.result_summary) : undefined,
+      configSnapshot: safeJsonParse(row.config_snapshot, undefined),
+      resultSummary: safeJsonParse(row.result_summary, undefined),
     }
   }
 

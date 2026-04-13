@@ -33,7 +33,9 @@ function onSimpleToast(e: Event) {
   const detail = (e as CustomEvent).detail as { title: string; description: string }
   simpleToast.value = detail
   if (simpleToastTimer) clearTimeout(simpleToastTimer)
-  simpleToastTimer = setTimeout(() => { simpleToast.value = null }, 4000)
+  simpleToastTimer = setTimeout(() => {
+    simpleToast.value = null
+  }, 4000)
 }
 
 onMounted(() => {
@@ -93,14 +95,9 @@ function goToSettings() {
               <UIcon name="i-heroicons-user-circle" class="h-5 w-5 text-pink-500" />
               <span class="text-sm font-semibold text-gray-900 dark:text-white">识别您的身份</span>
             </div>
-            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-              在该聊天群中，您是哪位成员？
-            </p>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">在该聊天群中，您是哪位成员？</p>
           </div>
-          <button
-            class="ml-2 shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            @click="dismiss"
-          >
+          <button class="ml-2 shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" @click="dismiss">
             <UIcon name="i-heroicons-x-mark" class="h-4 w-4" />
           </button>
         </div>
@@ -126,10 +123,7 @@ function goToSettings() {
           >
             手动设置
           </button>
-          <button
-            class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            @click="dismiss"
-          >
+          <button class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" @click="dismiss">
             跳过此次
           </button>
         </div>

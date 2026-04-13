@@ -18,7 +18,13 @@ import { focusService } from '../services/focusService'
 import type { FocusQueryOptions } from '../services/focusService'
 import { graphService } from '../services/graphService'
 import type { GraphQueryOptions } from '../services/graphService'
-import { startTaskExtraction, startGraphExtraction, startFaqExtraction, startFocusExtraction } from '../services/extractionRunner'
+import {
+  startTaskExtraction,
+  startGraphExtraction,
+  startFaqExtraction,
+  startFocusExtraction,
+  startUnifiedExtraction,
+} from '../services/extractionRunner'
 import { openDatabase } from '../database/core'
 
 /**
@@ -49,25 +55,41 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
-  ipcMain.handle('collab:createTask', async (_event, task: Parameters<typeof taskService.createTask>[0]) => {
-    try {
-      const id = taskService.createTask(task)
-      return { success: true, data: id }
-    } catch (error) {
-      console.error('[Collaboration] createTask failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:createTask',
+    async (_event, payload: Parameters<typeof taskService.createTask>[0] & { sessionId?: string }) => {
+      if (!payload || typeof payload !== 'object') {
+        return { success: false, error: 'task is required' }
+      }
+      try {
+        const { sessionId, ...task } = payload
+        const metadata = { ...(task.metadata ?? {}), ...(sessionId ? { sessionId } : {}) }
+        const normalized = { ...task, tags: task.tags ?? [], metadata }
+        const id = taskService.createTask(normalized)
+        // 手工建的任务也要落 task_source，否则 getTasksBySession 查不到（和 extractionRunner 同构）
+        if (sessionId) {
+          taskService.addTaskSource(id, sessionId, 0, Date.now(), task.confidence ?? 1.0)
+        }
+        return { success: true, data: id }
+      } catch (error) {
+        console.error('[Collaboration] createTask failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
-  ipcMain.handle('collab:updateTask', async (_event, taskId: number, updates: Parameters<typeof taskService.updateTask>[1]) => {
-    try {
-      const ok = taskService.updateTask(taskId, updates)
-      return { success: ok }
-    } catch (error) {
-      console.error('[Collaboration] updateTask failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:updateTask',
+    async (_event, taskId: number, updates: Parameters<typeof taskService.updateTask>[1]) => {
+      try {
+        const ok = taskService.updateTask(taskId, updates)
+        return { success: ok }
+      } catch (error) {
+        console.error('[Collaboration] updateTask failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('collab:deleteTask', async (_event, taskId: number) => {
     try {
@@ -80,6 +102,9 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
   })
 
   ipcMain.handle('collab:getTasksBySession', async (_event, sessionId: string, status?: string) => {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return { success: false, error: 'sessionId is required and must be a non-empty string' }
+    }
     try {
       return { success: true, data: taskService.getTasksBySession(sessionId, status) }
     } catch (error) {
@@ -110,7 +135,13 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(
     'collab:createExtractionJob',
-    async (_event, sessionId: string, jobType: JobType, forceRerun: boolean = false) => {
+    async (
+      _event,
+      sessionId: string,
+      jobType: JobType,
+      forceRerun: boolean = false,
+      globalNicknames: string[] = []
+    ) => {
       try {
         const job = await extractionJobService.createJob(sessionId, jobType, forceRerun)
         // Launch actual extraction asynchronously based on jobType
@@ -132,17 +163,8 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
               console.error('[Collaboration] startFocusExtraction error:', err)
             )
           } else if (jobType === 'all') {
-            startTaskExtraction(sessionId, win).catch((err) =>
-              console.error('[Collaboration] startTaskExtraction (all) error:', err)
-            )
-            startGraphExtraction(sessionId, win).catch((err) =>
-              console.error('[Collaboration] startGraphExtraction (all) error:', err)
-            )
-            startFaqExtraction(sessionId, win).catch((err) =>
-              console.error('[Collaboration] startFaqExtraction (all) error:', err)
-            )
-            startFocusExtraction(sessionId, win).catch((err) =>
-              console.error('[Collaboration] startFocusExtraction (all) error:', err)
+            startUnifiedExtraction(sessionId, win, forceRerun, globalNicknames).catch((err) =>
+              console.error('[Collaboration] startUnifiedExtraction error:', err)
             )
           }
         }
@@ -153,6 +175,33 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
       }
     }
   )
+
+  // 查询某会话的增量分析状态：有多少新消息还未分析
+  ipcMain.handle('collab:getAnalysisStatus', async (_event, sessionId: string) => {
+    try {
+      const lastDone = extractionJobService.getLatestDoneJob(sessionId, 'all')
+      const lastAnalyzedId = (lastDone?.resultSummary?.lastAnalyzedMessageId as number | undefined) ?? 0
+      const { total } = await (await import('../worker/workerManager')).getAllRecentMessages(sessionId, undefined, 1)
+      // 简化：假设 id 连续递增（SQLite 自增），新消息数 = total - lastAnalyzedId
+      // 如不连续，后续可改为 "count where id > lastAnalyzedId"
+      const newMessageCount = Math.max(0, total - lastAnalyzedId)
+      return {
+        success: true,
+        data: {
+          sessionId,
+          lastAnalyzedMessageId: lastAnalyzedId,
+          lastAnalyzedAt: lastDone?.finishedAt ?? null,
+          totalMessages: total,
+          newMessageCount,
+          hasNewMessages: newMessageCount > 0,
+          everAnalyzed: !!lastDone,
+        },
+      }
+    } catch (error) {
+      console.error('[Collaboration] getAnalysisStatus failed:', error)
+      return { success: false, error: String(error) }
+    }
+  })
 
   ipcMain.handle('collab:retryExtractionJob', async (_event, jobId: string) => {
     try {
@@ -166,7 +215,8 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
 
   ipcMain.handle('collab:getFailedJobs', async (_event, limit: number = 10) => {
     try {
-      return { success: true, data: extractionJobService.getFailedJobs(limit) }
+      const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 10
+      return { success: true, data: extractionJobService.getFailedJobs(safeLimit) }
     } catch (error) {
       console.error('[Collaboration] getFailedJobs failed:', error)
       return { success: false, error: String(error) }
@@ -193,45 +243,55 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
-  ipcMain.handle('collab:createTodo', async (_event, todo: Partial<Parameters<typeof todoService.createTodo>[0]> & { title: string }) => {
-    try {
-      // 应用默认值，确保必填字段存在
-      const fullTodo: Parameters<typeof todoService.createTodo>[0] = {
-        globalUserId: todo.globalUserId || 'default',
-        title: todo.title,
-        description: todo.description,
-        status: todo.status || 'pending',
-        priority: todo.priority || 'normal',
-        progress: todo.progress ?? 0,
-        tags: todo.tags || [],
-        isStarred: todo.isStarred ?? false,
-        sourceType: todo.sourceType || 'manual',
-        sourceSessionId: todo.sourceSessionId,
-        taskId: todo.taskId,
-        taskTitle: todo.taskTitle,
-        dueTs: todo.dueTs,
-        reminderTs: todo.reminderTs,
-        notes: todo.notes,
-        completedTs: todo.completedTs,
+  ipcMain.handle(
+    'collab:createTodo',
+    async (_event, todo: Partial<Parameters<typeof todoService.createTodo>[0]> & { title: string }) => {
+      try {
+        // Runtime validation — IPC args lose TypeScript types after serialization
+        if (!todo.title || typeof todo.title !== 'string' || todo.title.trim() === '') {
+          return { success: false, error: 'title is required and must be a non-empty string' }
+        }
+        // 应用默认值，确保必填字段存在
+        const fullTodo: Parameters<typeof todoService.createTodo>[0] = {
+          globalUserId: todo.globalUserId || 'default',
+          title: todo.title.trim().slice(0, 500),
+          description: todo.description,
+          status: todo.status || 'pending',
+          priority: todo.priority || 'normal',
+          progress: todo.progress ?? 0,
+          tags: todo.tags || [],
+          isStarred: todo.isStarred ?? false,
+          sourceType: todo.sourceType || 'manual',
+          sourceSessionId: todo.sourceSessionId,
+          taskId: todo.taskId,
+          taskTitle: todo.taskTitle,
+          dueTs: todo.dueTs,
+          reminderTs: todo.reminderTs,
+          notes: todo.notes,
+          completedTs: todo.completedTs,
+        }
+        const id = todoService.createTodo(fullTodo)
+        console.log('[Collaboration] createTodo:', todo.title, '→ id', id)
+        return { success: true, data: id }
+      } catch (error) {
+        console.error('[Collaboration] createTodo failed:', error)
+        return { success: false, error: String(error) }
       }
-      const id = todoService.createTodo(fullTodo)
-      console.log('[Collaboration] createTodo:', todo.title, '→ id', id)
-      return { success: true, data: id }
-    } catch (error) {
-      console.error('[Collaboration] createTodo failed:', error)
-      return { success: false, error: String(error) }
     }
-  })
+  )
 
-  ipcMain.handle('collab:updateTodo', async (_event, todoId: number, updates: Parameters<typeof todoService.updateTodo>[1]) => {
-    try {
-      const ok = todoService.updateTodo(todoId, updates)
-      return { success: ok }
-    } catch (error) {
-      console.error('[Collaboration] updateTodo failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:updateTodo',
+    async (_event, todoId: number, updates: Parameters<typeof todoService.updateTodo>[1]) => {
+      try {
+        const ok = todoService.updateTodo(todoId, updates)
+        return { success: ok }
+      } catch (error) {
+        console.error('[Collaboration] updateTodo failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('collab:deleteTodo', async (_event, todoId: number) => {
     try {
@@ -280,25 +340,43 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
-  ipcMain.handle('collab:createKnowledgeItem', async (_event, item: Parameters<typeof knowledgeService.createItem>[0]) => {
-    try {
-      const id = knowledgeService.createItem(item)
-      return { success: true, data: id }
-    } catch (error) {
-      console.error('[Collaboration] createKnowledgeItem failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:createKnowledgeItem',
+    async (_event, item: Parameters<typeof knowledgeService.createItem>[0]) => {
+      if (!item || typeof item !== 'object') {
+        return { success: false, error: 'item is required' }
+      }
+      if (!item.title || typeof item.title !== 'string' || item.title.trim() === '') {
+        return { success: false, error: 'title is required and must be a non-empty string' }
+      }
+      if (!item.content || typeof item.content !== 'string') {
+        return { success: false, error: 'content is required and must be a string' }
+      }
+      if (!item.type || typeof item.type !== 'string') {
+        return { success: false, error: 'type is required and must be a string' }
+      }
+      try {
+        const id = knowledgeService.createItem({ ...item, title: item.title.trim() })
+        return { success: true, data: id }
+      } catch (error) {
+        console.error('[Collaboration] createKnowledgeItem failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
-  ipcMain.handle('collab:updateKnowledgeItem', async (_event, itemId: number, updates: Parameters<typeof knowledgeService.updateItem>[1]) => {
-    try {
-      const ok = knowledgeService.updateItem(itemId, updates)
-      return { success: ok }
-    } catch (error) {
-      console.error('[Collaboration] updateKnowledgeItem failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:updateKnowledgeItem',
+    async (_event, itemId: number, updates: Parameters<typeof knowledgeService.updateItem>[1]) => {
+      try {
+        const ok = knowledgeService.updateItem(itemId, updates)
+        return { success: ok }
+      } catch (error) {
+        console.error('[Collaboration] updateKnowledgeItem failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('collab:archiveKnowledgeItem', async (_event, itemId: number) => {
     try {
@@ -351,8 +429,20 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
   })
 
   ipcMain.handle('collab:createFocusItem', async (_event, item: Parameters<typeof focusService.createFocusItem>[0]) => {
+    if (!item || typeof item !== 'object') {
+      return { success: false, error: 'item is required' }
+    }
+    if (!item.title || typeof item.title !== 'string' || item.title.trim() === '') {
+      return { success: false, error: 'title is required and must be a non-empty string' }
+    }
+    if (!item.type || typeof item.type !== 'string') {
+      return { success: false, error: 'type is required and must be a string' }
+    }
+    if (!item.globalUserId || typeof item.globalUserId !== 'string') {
+      return { success: false, error: 'globalUserId is required and must be a string' }
+    }
     try {
-      const id = focusService.createFocusItem(item)
+      const id = focusService.createFocusItem({ ...item, title: item.title.trim() })
       return { success: true, data: id }
     } catch (error) {
       console.error('[Collaboration] createFocusItem failed:', error)
@@ -360,15 +450,18 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
-  ipcMain.handle('collab:updateFocusItem', async (_event, itemId: number, updates: Parameters<typeof focusService.updateFocusItem>[1]) => {
-    try {
-      const ok = focusService.updateFocusItem(itemId, updates)
-      return { success: ok }
-    } catch (error) {
-      console.error('[Collaboration] updateFocusItem failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:updateFocusItem',
+    async (_event, itemId: number, updates: Parameters<typeof focusService.updateFocusItem>[1]) => {
+      try {
+        const ok = focusService.updateFocusItem(itemId, updates)
+        return { success: ok }
+      } catch (error) {
+        console.error('[Collaboration] updateFocusItem failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('collab:archiveFocusItem', async (_event, itemId: number) => {
     try {
@@ -390,15 +483,18 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
     }
   })
 
-  ipcMain.handle('collab:addTaskSource', async (_event, taskId: number, sessionId: string, messageId: number, messageTs: number, confidence?: number) => {
-    try {
-      taskService.addTaskSource(taskId, sessionId, messageId, messageTs, confidence)
-      return { success: true }
-    } catch (error) {
-      console.error('[Collaboration] addTaskSource failed:', error)
-      return { success: false, error: String(error) }
+  ipcMain.handle(
+    'collab:addTaskSource',
+    async (_event, taskId: number, sessionId: string, messageId: number, messageTs: number, confidence?: number) => {
+      try {
+        taskService.addTaskSource(taskId, sessionId, messageId, messageTs, confidence)
+        return { success: true }
+      } catch (error) {
+        console.error('[Collaboration] addTaskSource failed:', error)
+        return { success: false, error: String(error) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('collab:getFocusActivity', async (_event, focusId: number, limit?: number) => {
     try {
@@ -421,11 +517,12 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
   })
 
   ipcMain.handle('collab:getGraphEdges', async (_event, nodeIds: number[]) => {
+    if (!Array.isArray(nodeIds)) return { success: false, error: 'nodeIds must be array' }
     try {
       return { success: true, data: graphService.queryEdges(nodeIds) }
     } catch (error) {
       console.error('[Collaboration] getGraphEdges failed:', error)
-      return { success: false, error: String(error) }
+      return { success: false, error: 'Failed to get graph edges' }
     }
   })
 
@@ -439,9 +536,17 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
   })
 
   ipcMain.handle('collab:upsertGraphNode', async (_event, node: Parameters<typeof graphService.upsertNode>[0]) => {
+    if (!node || typeof node !== 'object') {
+      return { success: false, error: 'node is required' }
+    }
     try {
-      const nodeId = graphService.upsertNode(node)
-      console.log('[Collaboration] upsertGraphNode:', node.name, '→ id', nodeId)
+      const normalized = {
+        ...node,
+        sourceSessions: node.sourceSessions ?? [],
+        sourceMessageRefs: node.sourceMessageRefs ?? [],
+      }
+      const nodeId = graphService.upsertNode(normalized)
+      console.log('[Collaboration] upsertGraphNode:', normalized.name, '→ id', nodeId)
       return { success: true, data: nodeId }
     } catch (error) {
       console.error('[Collaboration] upsertGraphNode failed:', error)
@@ -450,9 +555,13 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
   })
 
   ipcMain.handle('collab:upsertGraphEdge', async (_event, edge: Parameters<typeof graphService.upsertEdge>[0]) => {
+    if (!edge || typeof edge !== 'object') {
+      return { success: false, error: 'edge is required' }
+    }
     try {
-      const edgeId = graphService.upsertEdge(edge)
-      console.log('[Collaboration] upsertGraphEdge:', edge.type, '→ id', edgeId)
+      const normalized = { ...edge, sourceSessions: edge.sourceSessions ?? [] }
+      const edgeId = graphService.upsertEdge(normalized)
+      console.log('[Collaboration] upsertGraphEdge:', normalized.type, '→ id', edgeId)
       return { success: true, data: edgeId }
     } catch (error) {
       console.error('[Collaboration] upsertGraphEdge failed:', error)
@@ -462,6 +571,8 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
 
   // 获取会话发言量 Top N 成员（用于身份 Layer 2 Toast）
   ipcMain.handle('collab:getSessionTopMembers', async (_event, sessionId: string, topN: number = 3) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'invalid sessionId' }
+    const safeTopN = Number.isFinite(topN) && topN > 0 ? Math.floor(topN) : 3
     try {
       const db = openDatabase(sessionId, true)
       if (!db) return { success: false, error: 'session not found' }
@@ -476,7 +587,7 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
              ORDER BY message_count DESC
              LIMIT ?`
           )
-          .all(topN) as Array<{ id: number; name: string; message_count: number }>
+          .all(safeTopN) as Array<{ id: number; name: string; message_count: number }>
         return {
           success: true,
           data: rows.map((r) => ({ id: r.id, name: r.name, messageCount: r.message_count })),
@@ -492,4 +603,3 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
 
   console.log('[Collaboration] IPC handlers registered')
 }
-

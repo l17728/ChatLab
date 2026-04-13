@@ -394,7 +394,7 @@ describe('Phase 3: User Management & Authentication', () => {
 
       // 3. Change password
       console.log('[Test] Step 3: Change password')
-      let pwdResult = userDb.updateUserPassword('lifecycle', 'initial123', 'updated456')
+      const pwdResult = userDb.updateUserPassword('lifecycle', 'initial123', 'updated456')
       expect(pwdResult.success).toBe(true)
 
       // 4. Verify password changed

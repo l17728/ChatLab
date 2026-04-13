@@ -120,13 +120,7 @@ function initializeDatabase(): UserDatabase {
  */
 export function hashPassword(password: string): PasswordHashResult {
   const salt = randomBytes(SALT_LENGTH).toString('hex')
-  const hash = pbkdf2Sync(
-    password,
-    salt,
-    HASH_ITERATIONS,
-    HASH_KEYLEN,
-    HASH_DIGEST
-  ).toString('hex')
+  const hash = pbkdf2Sync(password, salt, HASH_ITERATIONS, HASH_KEYLEN, HASH_DIGEST).toString('hex')
 
   return { hash, salt }
 }
@@ -135,13 +129,7 @@ export function hashPassword(password: string): PasswordHashResult {
  * Verify password against stored hash
  */
 export function verifyPassword(password: string, hash: string, salt: string): boolean {
-  const computedHash = pbkdf2Sync(
-    password,
-    salt,
-    HASH_ITERATIONS,
-    HASH_KEYLEN,
-    HASH_DIGEST
-  ).toString('hex')
+  const computedHash = pbkdf2Sync(password, salt, HASH_ITERATIONS, HASH_KEYLEN, HASH_DIGEST).toString('hex')
 
   return computedHash === hash
 }
@@ -186,7 +174,7 @@ export function registerUser(username: string, password: string): { success: boo
     const db = loadDatabase()
 
     // Check if user already exists
-    if (db.users.some(u => u.username === username)) {
+    if (db.users.some((u) => u.username === username)) {
       console.warn(`[WebUI User DB] Registration failed: user already exists - ${username}`)
       return { success: false, error: 'Username already exists' }
     }
@@ -208,12 +196,15 @@ export function registerUser(username: string, password: string): { success: boo
 /**
  * Authenticate user
  */
-export function authenticateUser(username: string, password: string): { success: boolean; user?: User; error?: string } {
+export function authenticateUser(
+  username: string,
+  password: string
+): { success: boolean; user?: User; error?: string } {
   try {
     console.log(`[WebUI User DB] Authentication attempt: ${username}`)
 
     const db = loadDatabase()
-    const user = db.users.find(u => u.username === username && u.isActive)
+    const user = db.users.find((u) => u.username === username && u.isActive)
 
     if (!user) {
       console.warn(`[WebUI User DB] Authentication failed: user not found - ${username}`)
@@ -242,7 +233,11 @@ export function authenticateUser(username: string, password: string): { success:
 /**
  * Update user password
  */
-export function updateUserPassword(username: string, oldPassword: string, newPassword: string): { success: boolean; error?: string } {
+export function updateUserPassword(
+  username: string,
+  oldPassword: string,
+  newPassword: string
+): { success: boolean; error?: string } {
   try {
     console.log(`[WebUI User DB] Password change requested: ${username}`)
 
@@ -252,7 +247,7 @@ export function updateUserPassword(username: string, oldPassword: string, newPas
     }
 
     const db = loadDatabase()
-    const user = db.users.find(u => u.username === username)
+    const user = db.users.find((u) => u.username === username)
 
     if (!user) {
       console.warn(`[WebUI User DB] Password change failed: user not found - ${username}`)
@@ -283,12 +278,45 @@ export function updateUserPassword(username: string, oldPassword: string, newPas
 }
 
 /**
+ * Force reset user password (admin function - no old password required)
+ */
+export function forceResetPassword(username: string, newPassword: string): { success: boolean; error?: string } {
+  try {
+    console.log(`[WebUI User DB] Admin password reset requested: ${username}`)
+
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, error: 'New password must be at least 6 characters' }
+    }
+
+    const db = loadDatabase()
+    const user = db.users.find((u) => u.username === username)
+
+    if (!user) {
+      return { success: false, error: 'User not found' }
+    }
+
+    const { hash, salt } = hashPassword(newPassword)
+    user.passwordHash = hash
+    user.salt = salt
+    user.updatedAt = Date.now()
+    saveDatabase(db)
+
+    console.log(`[WebUI User DB] Admin password reset successful: ${username}`)
+    return { success: true }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[WebUI User DB] Admin password reset error: ${errMsg}`)
+    return { success: false, error: `Password reset failed: ${errMsg}` }
+  }
+}
+
+/**
  * Get user by username
  */
 export function getUserByUsername(username: string): User | null {
   try {
     const db = loadDatabase()
-    return db.users.find(u => u.username === username) || null
+    return db.users.find((u) => u.username === username) || null
   } catch (error) {
     console.error(`[WebUI User DB] Error getting user: ${error}`)
     return null
@@ -301,7 +329,7 @@ export function getUserByUsername(username: string): User | null {
 export function getUserById(userId: string): User | null {
   try {
     const db = loadDatabase()
-    return db.users.find(u => u.id === userId) || null
+    return db.users.find((u) => u.id === userId) || null
   } catch (error) {
     console.error(`[WebUI User DB] Error getting user by ID: ${error}`)
     return null
@@ -314,11 +342,16 @@ export function getUserById(userId: string): User | null {
 export function listActiveUsers(): User[] {
   try {
     const db = loadDatabase()
-    return db.users.filter(u => u.isActive).map(u => ({
-      ...u,
-      passwordHash: undefined,
-      salt: undefined,
-    } as any)) // Remove sensitive fields
+    return db.users
+      .filter((u) => u.isActive)
+      .map((u) => ({
+        id: u.id,
+        username: u.username,
+        isActive: u.isActive,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+        lastLoginAt: u.lastLoginAt,
+      })) as any
   } catch (error) {
     console.error(`[WebUI User DB] Error listing users: ${error}`)
     return []
@@ -333,7 +366,7 @@ export function deactivateUser(username: string): { success: boolean; error?: st
     console.log(`[WebUI User DB] Deactivating user: ${username}`)
 
     const db = loadDatabase()
-    const user = db.users.find(u => u.username === username)
+    const user = db.users.find((u) => u.username === username)
 
     if (!user) {
       console.warn(`[WebUI User DB] Deactivation failed: user not found - ${username}`)
@@ -362,7 +395,7 @@ export function reactivateUser(username: string): { success: boolean; error?: st
     console.log(`[WebUI User DB] Reactivating user: ${username}`)
 
     const db = loadDatabase()
-    const user = db.users.find(u => u.username === username)
+    const user = db.users.find((u) => u.username === username)
 
     if (!user) {
       console.warn(`[WebUI User DB] Reactivation failed: user not found - ${username}`)
@@ -391,7 +424,7 @@ export function deleteUser(username: string): { success: boolean; error?: string
     console.log(`[WebUI User DB] Deleting user: ${username}`)
 
     const db = loadDatabase()
-    const index = db.users.findIndex(u => u.username === username)
+    const index = db.users.findIndex((u) => u.username === username)
 
     if (index === -1) {
       console.warn(`[WebUI User DB] Deletion failed: user not found - ${username}`)
@@ -423,7 +456,7 @@ export function getUserStatistics(): {
 } {
   try {
     const db = loadDatabase()
-    const activeUsers = db.users.filter(u => u.isActive).length
+    const activeUsers = db.users.filter((u) => u.isActive).length
 
     return {
       totalUsers: db.users.length,

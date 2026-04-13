@@ -16,6 +16,7 @@ import * as crypto from 'crypto'
 import { pipeline } from 'stream/promises'
 import { getTempDir } from '../../paths'
 import * as worker from '../../worker/workerManager'
+import { startUnifiedExtraction } from '../../services/extractionRunner'
 import {
   successResponse,
   sessionNotFound,
@@ -62,11 +63,7 @@ export function getImportingStatus(): boolean {
   return isImporting
 }
 
-async function handleImport(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  sessionId?: string
-): Promise<void> {
+async function handleImport(request: FastifyRequest, reply: FastifyReply, sessionId?: string): Promise<void> {
   if (isImporting) {
     const err = importInProgress()
     reply.code(err.statusCode).send(errorResponse(err))
@@ -147,6 +144,25 @@ async function handleImport(
       if (result.success) {
         notifySessionListChanged()
 
+        // 与 IPC 导入路径保持一致：新会话导入后异步触发统一提取
+        if (result.sessionId) {
+          setImmediate(() => {
+            try {
+              const { BrowserWindow } = require('electron')
+              const win = BrowserWindow.getAllWindows()[0]
+              if (win) {
+                // 从身份缓存读取 globalNicknames，让 todos 语义过滤生效
+                const { getGlobalNicknames } = require('../../identity/cache')
+                startUnifiedExtraction(result.sessionId!, win, false, getGlobalNicknames()).catch((err: unknown) => {
+                  console.error('[ChatLab API] Unified extraction failed:', err)
+                })
+              }
+            } catch (err) {
+              console.error('[ChatLab API] Failed to trigger extraction:', err)
+            }
+          })
+        }
+
         reply.send(
           successResponse({
             mode: 'new',
@@ -162,7 +178,7 @@ async function handleImport(
     }
   } catch (error: any) {
     console.error('[ChatLab API] Import error:', error)
-    const err = importFailed(error.message || 'Import process error')
+    const err = importFailed('Import process error')
     reply.code(err.statusCode).send(errorResponse(err))
   } finally {
     isImporting = false
@@ -174,12 +190,9 @@ async function handleImport(
 
 export function registerImportRoutes(server: FastifyInstance): void {
   // JSONL mode: skip fastify's default body parsing, use request.raw stream directly
-  server.addContentTypeParser(
-    'application/x-ndjson',
-    (_request, _payload, done) => {
-      done(null, undefined)
-    }
-  )
+  server.addContentTypeParser('application/x-ndjson', (_request, _payload, done) => {
+    done(null, undefined)
+  })
 
   // POST /api/v1/import — Import to new session
   server.post('/api/v1/import', async (request, reply) => {
@@ -187,10 +200,30 @@ export function registerImportRoutes(server: FastifyInstance): void {
   })
 
   // POST /api/v1/sessions/:id/import — Incremental import to existing session
-  server.post<{ Params: { id: string } }>(
-    '/api/v1/sessions/:id/import',
-    async (request, reply) => {
-      await handleImport(request, reply, request.params.id)
+  server.post<{ Params: { id: string } }>('/api/v1/sessions/:id/import', async (request, reply) => {
+    await handleImport(request, reply, request.params.id)
+  })
+
+  // POST /api/v1/sessions/:id/extract — 手动触发统一提取（开发调试用）
+  server.post<{ Params: { id: string } }>('/api/v1/sessions/:id/extract', async (request, reply) => {
+    try {
+      const { BrowserWindow } = require('electron')
+      const win = BrowserWindow.getAllWindows()[0]
+      if (!win) {
+        reply.code(500).send(errorResponse(importFailed('No browser window available')))
+        return
+      }
+      // 后台异步跑，立即返回；force=true 强制重跑
+      setImmediate(() => {
+        const { getGlobalNicknames } = require('../../identity/cache')
+        startUnifiedExtraction(request.params.id, win, true, getGlobalNicknames()).catch((err: unknown) => {
+          console.error('[ChatLab API] Manual unified extraction failed:', err)
+        })
+      })
+      reply.send(successResponse({ triggered: true, sessionId: request.params.id }))
+    } catch (err: any) {
+      console.error('[ChatLab API] extract trigger failed:', err)
+      reply.code(500).send(errorResponse(importFailed(String(err?.message || err))))
     }
-  )
+  })
 }

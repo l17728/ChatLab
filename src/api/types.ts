@@ -19,6 +19,7 @@ export interface AuthResponse {
   success: boolean
   token?: string
   expiresAt?: number
+  userId?: string
   error?: string
 }
 
@@ -129,6 +130,11 @@ export interface ErrorResponse {
   error: string
 }
 
+export interface DeleteSessionResponse {
+  success: boolean
+  error?: string
+}
+
 // ==================== API Client Interface ====================
 
 /**
@@ -145,6 +151,7 @@ export interface IApiClient {
   // Session Management
   listSessions(): Promise<ListSessionsResponse>
   getSession(sessionId: string): Promise<GetSessionResponse>
+  deleteSession(sessionId: string): Promise<DeleteSessionResponse>
 
   // Conversation Management
   createConversation(request: CreateConversationRequest): Promise<CreateConversationResponse>

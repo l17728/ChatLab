@@ -12,10 +12,14 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
-  timeout: 60_000,       // 单个 test 最长 60s（含 AI 响应等待）
-  globalTimeout: 600_000, // 整套测试最长 10 分钟（两个 Electron 套件串行）
-  retries: 0,             // CI 中失败不重试，保持日志清晰
-  workers: 1,             // E2E 必须串行，避免 Electron 实例冲突
+  timeout: 60_000, // 单个 test 最长 60s（含 AI 响应等待）
+  globalTimeout: 900_000, //整套测试最长 15 分钟（多个 Electron 套件串行，每个有 2 分钟启动窗口）
+  retries: 0, // CI 中失败不重试，保持日志清晰
+  workers: 1, // E2E 必须串行，避免 Electron 实例冲突
+
+  // 核心原则：每次测试前/后关闭桌面程序，防止端口冲突
+  globalSetup: './tests/e2e/global-setup.js',
+  globalTeardown: './tests/e2e/global-teardown.js',
 
   use: {
     // 截图：仅在失败时保留
@@ -29,8 +33,5 @@ export default defineConfig({
   },
 
   // 测试结果输出
-  reporter: [
-    ['list'],
-    ['html', { outputFolder: 'playwright-report', open: 'never' }],
-  ],
+  reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
 })

@@ -4,29 +4,29 @@
  * 使用 Playwright 启动浏览器展示应用实现
  */
 
-const { chromium } = require('@playwright/test');
-const path = require('path');
-const fs = require('fs');
+const { chromium } = require('@playwright/test')
+const path = require('path')
+const fs = require('fs')
 
 async function runVisualDemo() {
-  console.log('\n🎬 启动 ChatLab Web UI 可视化演示\n');
-  console.log('═'.repeat(70));
+  console.log('\n🎬 启动 ChatLab Web UI 可视化演示\n')
+  console.log('═'.repeat(70))
 
-  let browser;
+  let browser
   try {
     // 启动浏览器
-    console.log('\n🌐 启动 Chromium 浏览器...');
+    console.log('\n🌐 启动 Chromium 浏览器...')
     browser = await chromium.launch({
-      headless: false,  // 显示浏览器窗口
-    });
+      headless: false, // 显示浏览器窗口
+    })
 
-    console.log('✅ 浏览器启动成功\n');
+    console.log('✅ 浏览器启动成功\n')
 
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    const context = await browser.newContext()
+    const page = await context.newPage()
 
     // 设置视口大小
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setViewportSize({ width: 1280, height: 800 })
 
     // 创建演示 HTML
     const demoHtml = `<!DOCTYPE html>
@@ -218,40 +218,40 @@ async function runVisualDemo() {
         });
     </script>
 </body>
-</html>`;
+</html>`
 
     // 保存演示文件
-    const demoPath = path.join(process.cwd(), '.test-demo.html');
-    fs.writeFileSync(demoPath, demoHtml);
+    const demoPath = path.join(process.cwd(), '.test-demo.html')
+    fs.writeFileSync(demoPath, demoHtml)
 
-    console.log('📂 演示页面已生成\n');
+    console.log('📂 演示页面已生成\n')
 
     // 导航到演示页面
-    await page.goto('file://' + demoPath);
+    await page.goto('file://' + demoPath)
 
-    console.log('═'.repeat(70));
-    console.log('\n👁️ Web UI 登录界面已在浏览器中显示\n');
-    console.log('✨ 可视化演示内容:\n');
-    console.log('  1️⃣  登录表单布局');
-    console.log('     • 用户名输入框（id="username"）');
-    console.log('     • 密码输入框（id="password"）');
-    console.log('     • 登录按钮（type="submit"）');
-    console.log('     • 错误提示区域\n');
+    console.log('═'.repeat(70))
+    console.log('\n👁️ Web UI 登录界面已在浏览器中显示\n')
+    console.log('✨ 可视化演示内容:\n')
+    console.log('  1️⃣  登录表单布局')
+    console.log('     • 用户名输入框（id="username"）')
+    console.log('     • 密码输入框（id="password"）')
+    console.log('     • 登录按钮（type="submit"）')
+    console.log('     • 错误提示区域\n')
 
-    console.log('  2️⃣  样式和交互');
-    console.log('     • 渐变背景（紫色主题）');
-    console.log('     • 圆角卡片设计');
-    console.log('     • 输入框焦点效果');
-    console.log('     • 按钮悬停动画\n');
+    console.log('  2️⃣  样式和交互')
+    console.log('     • 渐变背景（紫色主题）')
+    console.log('     • 圆角卡片设计')
+    console.log('     • 输入框焦点效果')
+    console.log('     • 按钮悬停动画\n')
 
-    console.log('  3️⃣  功能验证');
-    console.log('     • 表单字段验证（required）');
-    console.log('     • API 调用逻辑');
-    console.log('     • 错误显示处理');
-    console.log('     • 路由跳转（到 Dashboard）\n');
+    console.log('  3️⃣  功能验证')
+    console.log('     • 表单字段验证（required）')
+    console.log('     • API 调用逻辑')
+    console.log('     • 错误显示处理')
+    console.log('     • 路由跳转（到 Dashboard）\n')
 
-    console.log('═'.repeat(70));
-    console.log('\n📋 实现文件查证:\n');
+    console.log('═'.repeat(70))
+    console.log('\n📋 实现文件查证:\n')
 
     // 检查关键文件
     const files = [
@@ -259,39 +259,38 @@ async function runVisualDemo() {
       'src/pages/Dashboard.vue',
       'src/pages/Settings.vue',
       'src/composables/useAuth.ts',
-      'src/routes/index.ts'
-    ];
+      'src/routes/index.ts',
+    ]
 
     for (const file of files) {
-      const fullPath = path.join(process.cwd(), file);
+      const fullPath = path.join(process.cwd(), file)
       if (fs.existsSync(fullPath)) {
-        const stats = fs.statSync(fullPath);
-        console.log(`  ✅ ${file}`);
-        console.log(`     └─ ${stats.size} 字节\n`);
+        const stats = fs.statSync(fullPath)
+        console.log(`  ✅ ${file}`)
+        console.log(`     └─ ${stats.size} 字节\n`)
       }
     }
 
-    console.log('═'.repeat(70));
-    console.log('\n⏳ 浏览器将保持打开状态（5分钟）...');
-    console.log('💡 您可以在浏览器中输入用户名和密码尝试登录');
-    console.log('💡 按 CTRL+C 关闭演示\n');
+    console.log('═'.repeat(70))
+    console.log('\n⏳ 浏览器将保持打开状态（5分钟）...')
+    console.log('💡 您可以在浏览器中输入用户名和密码尝试登录')
+    console.log('💡 按 CTRL+C 关闭演示\n')
 
     // 等待用户交互
-    await new Promise(resolve => {
+    await new Promise((resolve) => {
       setTimeout(() => {
-        resolve();
-      }, 300000); // 5分钟
-    });
-
+        resolve()
+      }, 300000) // 5分钟
+    })
   } catch (error) {
-    console.error('❌ 错误:', error.message);
+    console.error('❌ 错误:', error.message)
   } finally {
     if (browser) {
-      await browser.close();
-      console.log('\n✅ 浏览器已关闭');
+      await browser.close()
+      console.log('\n✅ 浏览器已关闭')
     }
   }
 }
 
 // 运行演示
-runVisualDemo().catch(console.error);
+runVisualDemo().catch(console.error)

@@ -29,6 +29,12 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTimeSelect } from '@/composables'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
 
+// 五个 AI 分析 Tab，共享"重新分析全部"按钮
+const ANALYSIS_TABS = new Set(['tasks', 'todos', 'focus', 'knowledge', 'graph'])
+
+// 跨会话 Tab：从 tasks 到 lab，数据作用范围是全局（跨群、跨对话），与前面的单会话分析 Tab 区分开
+const CROSS_SESSION_TABS = new Set(['tasks', 'todos', 'knowledge', 'focus', 'graph', 'ai-chat', 'lab'])
+
 const { t } = useI18n()
 
 const route = useRoute()
@@ -76,8 +82,9 @@ const allTabs = [
   { id: 'lab', labelKey: 'analysis.tabs.lab', icon: 'i-heroicons-beaker' },
 ]
 
-// Tab 列表
-const tabs = computed(() => allTabs)
+// 本会话 Tab（overview / view / quotes / members）和跨会话 Tab 分两组渲染
+const sessionScopedTabs = computed(() => allTabs.filter((t) => !CROSS_SESSION_TABS.has(t.id)))
+const crossSessionTabs = computed(() => allTabs.filter((t) => CROSS_SESSION_TABS.has(t.id)))
 
 function resolveActiveTabFromRoute(): string {
   const routeTab = route.query.tab as string | undefined
@@ -248,6 +255,109 @@ watch(
 onMounted(() => {
   syncSession()
 })
+
+// ==================== 统一 AI 分析（增量感知）====================
+const isReanalyzing = ref(false)
+const analysisStatus = ref<{
+  newMessageCount: number
+  hasNewMessages: boolean
+  everAnalyzed: boolean
+  lastAnalyzedAt: number | null
+} | null>(null)
+
+async function refreshAnalysisStatus() {
+  if (isBrowserEnvironment() || !currentSessionId.value) return
+  try {
+    const res = await window.collabApi?.getAnalysisStatus(currentSessionId.value)
+    if (res?.success && res.data) {
+      analysisStatus.value = {
+        newMessageCount: res.data.newMessageCount,
+        hasNewMessages: res.data.hasNewMessages,
+        everAnalyzed: res.data.everAnalyzed,
+        lastAnalyzedAt: res.data.lastAnalyzedAt,
+      }
+    }
+  } catch (err) {
+    console.error('[GroupChat] refreshAnalysisStatus failed:', err)
+  }
+}
+
+// 按钮提示：显示 "AI 分析" / "有 N 条新消息" / "完成分析"
+const analysisButtonLabel = computed(() => {
+  if (isReanalyzing.value) return '分析中'
+  if (!analysisStatus.value) return 'AI 分析'
+  const { everAnalyzed, hasNewMessages, newMessageCount } = analysisStatus.value
+  if (!everAnalyzed) return 'AI 分析'
+  if (hasNewMessages) return `增量分析 (${newMessageCount})`
+  return '完成分析'
+})
+
+const analysisButtonDisabled = computed(() => {
+  if (isReanalyzing.value) return true
+  // 已分析过且没有新消息时，按钮变灰
+  if (analysisStatus.value?.everAnalyzed && !analysisStatus.value.hasNewMessages) return true
+  return false
+})
+
+async function triggerUnifiedAnalysis() {
+  if (isBrowserEnvironment() || !currentSessionId.value) return
+  if (analysisButtonDisabled.value) return
+
+  // 前置校验：本会话必须先在「成员」页设置"我是谁"
+  // 未设置则提示并阻止分析——AI 需要知道"我"是谁才能正确提取 @我/点名我的待办
+  if (!sessionStore.currentSession?.ownerId) {
+    window.dispatchEvent(
+      new CustomEvent('collab:showSimpleToast', {
+        detail: {
+          title: '请先设置"我是谁"',
+          description: '在「成员」页顶部选择您在本群中对应的成员后再开始分析',
+        },
+      })
+    )
+    console.warn('[GroupChat] triggerUnifiedAnalysis blocked: 本会话 ownerId 未设置')
+    return
+  }
+
+  isReanalyzing.value = true
+  // 立即乐观更新：隐藏红点，label 通过 isReanalyzing 变为"分析中"
+  if (analysisStatus.value) {
+    analysisStatus.value = { ...analysisStatus.value, hasNewMessages: false, newMessageCount: 0 }
+  }
+  try {
+    // forceRerun=false：主进程会根据 lastAnalyzedMessageId 自动走增量路径
+    // 不 setTimeout 复位，等待 collab:extractionDone 事件
+    // 传入主昵称用于 todos 语义过滤（只提取 @我/点名我的无时间请求）
+    // Vue reactive Proxy 无法通过 Electron IPC structured clone，必须先转普通数组
+    const nicks = JSON.parse(JSON.stringify(settingsStore.identityConfig.globalNicknames ?? []))
+    await window.collabApi?.createExtractionJob(currentSessionId.value, 'all', false, nicks)
+  } catch (err) {
+    console.error('[GroupChat] triggerUnifiedAnalysis failed:', err)
+    isReanalyzing.value = false
+    refreshAnalysisStatus()
+  }
+}
+
+// 切会话 / 收到 extractionDone 时刷新状态
+watch(currentSessionId, () => refreshAnalysisStatus(), { immediate: true })
+onMounted(() => {
+  if (!isBrowserEnvironment() && (window as any).electron?.ipcRenderer) {
+    ;(window as any).electron.ipcRenderer.on('collab:extractionDone', (_e: any, data: any) => {
+      if (data?.sessionId === currentSessionId.value) {
+        isReanalyzing.value = false
+        // 分析完成后立即清红点：即便后端 getAnalysisStatus 的 newMessageCount
+        // 算法因 id 不连续出现短暂回弹，UI 也不会再显示"有新消息"
+        analysisStatus.value = {
+          newMessageCount: 0,
+          hasNewMessages: false,
+          everAnalyzed: true,
+          lastAnalyzedAt: Date.now(),
+        }
+        // 仍然异步刷新一次以同步真实 lastAnalyzedAt 等字段
+        refreshAnalysisStatus()
+      }
+    })
+  }
+})
 </script>
 
 <template>
@@ -272,6 +382,34 @@ onMounted(() => {
         icon-class="bg-primary-600 text-white dark:bg-primary-500 dark:text-white"
       >
         <template #actions>
+          <!-- AI 分析：自动走增量路径，根据 lastAnalyzedMessageId 只跑新消息 -->
+          <UButton
+            v-if="ANALYSIS_TABS.has(activeTab)"
+            :color="analysisStatus?.hasNewMessages ? 'orange' : 'primary'"
+            variant="soft"
+            size="sm"
+            :icon="isReanalyzing ? 'i-heroicons-arrow-path' : 'i-heroicons-sparkles'"
+            :loading="isReanalyzing"
+            :disabled="analysisButtonDisabled"
+            :title="
+              isReanalyzing
+                ? '正在分析中，请稍候'
+                : analysisStatus?.hasNewMessages
+                  ? `检测到 ${analysisStatus.newMessageCount} 条新消息，点击进行增量分析`
+                  : analysisStatus?.everAnalyzed
+                    ? '已完成分析，暂无新消息'
+                    : '点击运行 AI 分析，提取任务/待办/关注点/知识/图谱'
+            "
+            class="relative"
+            @click="triggerUnifiedAnalysis"
+          >
+            {{ analysisButtonLabel }}
+            <!-- 红点角标：有新消息时显示 -->
+            <span
+              v-if="analysisStatus?.hasNewMessages && !isReanalyzing"
+              class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
+            />
+          </UButton>
           <UButton
             color="primary"
             variant="soft"
@@ -285,27 +423,60 @@ onMounted(() => {
         </template>
         <!-- Tabs -->
         <div class="mt-4 flex items-center justify-between gap-3">
-          <div class="flex shrink-0 items-center gap-0.5 overflow-x-auto scrollbar-hide">
-            <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all"
-              :class="[
-                activeTab === tab.id
-                  ? 'bg-pink-500 text-white dark:bg-pink-900/30 dark:text-pink-300'
-                  : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800',
-              ]"
-              @click="activeTab = tab.id"
+          <div class="flex shrink-0 items-center gap-2 overflow-x-auto scrollbar-hide">
+            <!-- 本会话 Tab（单群数据：概览 / 查看 / 语录 / 成员） -->
+            <div class="flex items-center gap-0.5">
+              <button
+                v-for="tab in sessionScopedTabs"
+                :key="tab.id"
+                class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all"
+                :class="[
+                  activeTab === tab.id
+                    ? 'bg-pink-500 text-white dark:bg-pink-900/30 dark:text-pink-300'
+                    : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800',
+                ]"
+                @click="activeTab = tab.id"
+              >
+                <UIcon :name="tab.icon" class="h-4 w-4" />
+                <span class="whitespace-nowrap">{{ t(tab.labelKey) }}</span>
+              </button>
+            </div>
+
+            <!-- 视觉分隔：跨会话 Tab 组 -->
+            <div
+              class="flex items-center gap-0.5 rounded-xl border border-blue-200 bg-blue-50/60 p-1 dark:border-blue-800/60 dark:bg-blue-900/20"
+              :title="'以下功能聚合所有会话的数据，不受当前群限制'"
             >
-              <UIcon :name="tab.icon" class="h-4 w-4" />
-              <span class="whitespace-nowrap">{{ t(tab.labelKey) }}</span>
-            </button>
+              <button
+                v-for="tab in crossSessionTabs"
+                :key="tab.id"
+                class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all"
+                :class="[
+                  activeTab === tab.id
+                    ? 'bg-blue-600 text-white shadow-sm dark:bg-blue-500 dark:text-white'
+                    : 'text-blue-700 hover:bg-blue-100 dark:text-blue-300 dark:hover:bg-blue-900/40',
+                ]"
+                @click="activeTab = tab.id"
+              >
+                <UIcon :name="tab.icon" class="h-4 w-4" />
+                <span class="whitespace-nowrap">{{ t(tab.labelKey) }}</span>
+              </button>
+            </div>
           </div>
           <!-- AI 对话、实验室和成员页都不使用这里的时间范围筛选，因此在这些一级 Tab 下隐藏。 -->
           <TimeSelect
             v-model="timeRangeValue"
             :session-id="currentSessionId ?? undefined"
-            :visible="activeTab !== 'ai-chat' && activeTab !== 'lab' && activeTab !== 'members' && activeTab !== 'tasks' && activeTab !== 'todos' && activeTab !== 'knowledge' && activeTab !== 'focus' && activeTab !== 'graph'"
+            :visible="
+              activeTab !== 'ai-chat' &&
+              activeTab !== 'lab' &&
+              activeTab !== 'members' &&
+              activeTab !== 'tasks' &&
+              activeTab !== 'todos' &&
+              activeTab !== 'knowledge' &&
+              activeTab !== 'focus' &&
+              activeTab !== 'graph'
+            "
             :initial-state="initialTimeState"
             @update:full-range="fullTimeRange = $event"
             @update:available-years="availableYears = $event"
@@ -368,18 +539,9 @@ onMounted(() => {
               :key="'todos-' + currentSessionId"
               :session-id="currentSessionId!"
             />
-            <KnowledgeTab
-              v-else-if="activeTab === 'knowledge'"
-              key="knowledge"
-            />
-            <FocusTab
-              v-else-if="activeTab === 'focus'"
-              key="focus"
-            />
-            <GraphTab
-              v-else-if="activeTab === 'graph'"
-              key="graph"
-            />
+            <KnowledgeTab v-else-if="activeTab === 'knowledge'" key="knowledge" />
+            <FocusTab v-else-if="activeTab === 'focus'" key="focus" />
+            <GraphTab v-else-if="activeTab === 'graph'" key="graph" />
             <ChatExplorer
               v-else-if="activeTab === 'ai-chat'"
               :key="'ai-chat-' + currentSessionId"

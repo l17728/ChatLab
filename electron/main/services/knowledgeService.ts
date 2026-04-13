@@ -6,6 +6,15 @@
 import type Database from 'better-sqlite3'
 import { getGlobalDb } from '../database/global/index'
 
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
+}
+
 export interface KnowledgeItem {
   id: number
   type: 'faq' | 'document' | 'concept' | 'procedure' | 'tip' | 'qa'
@@ -49,7 +58,9 @@ export class KnowledgeService {
   /**
    * 创建知识条目
    */
-  createItem(item: Omit<KnowledgeItem, 'id' | 'createdTs' | 'updatedTs' | 'viewCount' | 'helpfulCount' | 'version'>): number {
+  createItem(
+    item: Omit<KnowledgeItem, 'id' | 'createdTs' | 'updatedTs' | 'viewCount' | 'helpfulCount' | 'version'>
+  ): number {
     const now = Date.now()
     const stmt = this.db.prepare(`
       INSERT INTO knowledge_item (
@@ -72,7 +83,7 @@ export class KnowledgeService {
       item.status,
       now,
       now,
-      item.parentId || null
+      item.parentId ?? null
     )
 
     const knowledgeId = result.lastInsertRowid as number
@@ -103,13 +114,34 @@ export class KnowledgeService {
     const fields: string[] = []
     const values: unknown[] = []
 
-    if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title) }
-    if (updates.content !== undefined) { fields.push('content = ?'); values.push(updates.content) }
-    if (updates.summary !== undefined) { fields.push('summary = ?'); values.push(updates.summary) }
-    if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category) }
-    if (updates.tags !== undefined) { fields.push('tags = ?'); values.push(JSON.stringify(updates.tags)) }
-    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status) }
-    if (updates.isEdited !== undefined) { fields.push('is_edited = ?'); values.push(updates.isEdited ? 1 : 0) }
+    if (updates.title !== undefined) {
+      fields.push('title = ?')
+      values.push(updates.title)
+    }
+    if (updates.content !== undefined) {
+      fields.push('content = ?')
+      values.push(updates.content)
+    }
+    if (updates.summary !== undefined) {
+      fields.push('summary = ?')
+      values.push(updates.summary)
+    }
+    if (updates.category !== undefined) {
+      fields.push('category = ?')
+      values.push(updates.category)
+    }
+    if (updates.tags !== undefined) {
+      fields.push('tags = ?')
+      values.push(JSON.stringify(updates.tags))
+    }
+    if (updates.status !== undefined) {
+      fields.push('status = ?')
+      values.push(updates.status)
+    }
+    if (updates.isEdited !== undefined) {
+      fields.push('is_edited = ?')
+      values.push(updates.isEdited ? 1 : 0)
+    }
 
     if (fields.length === 0) return false
 
@@ -125,7 +157,9 @@ export class KnowledgeService {
    * 删除知识条目（软删除）
    */
   archiveItem(id: number): boolean {
-    const result = this.db.prepare(`UPDATE knowledge_item SET status = 'archived', updated_ts = ? WHERE id = ?`).run(Date.now(), id)
+    const result = this.db
+      .prepare(`UPDATE knowledge_item SET status = 'archived', updated_ts = ? WHERE id = ?`)
+      .run(Date.now(), id)
     return result.changes > 0
   }
 
@@ -171,19 +205,27 @@ export class KnowledgeService {
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`
-    const sortCol = options.sortBy === 'helpful' ? 'helpful_count'
-      : options.sortBy === 'views' ? 'view_count'
-      : options.sortBy === 'updated' ? 'updated_ts'
-      : 'created_ts'
+    const sortCol =
+      options.sortBy === 'helpful'
+        ? 'helpful_count'
+        : options.sortBy === 'views'
+          ? 'view_count'
+          : options.sortBy === 'updated'
+            ? 'updated_ts'
+            : 'created_ts'
     const sortDir = options.sortOrder === 'asc' ? 'ASC' : 'DESC'
-    const limit = options.limit ? `LIMIT ${options.limit}` : 'LIMIT 100'
-    const offset = options.offset ? `OFFSET ${options.offset}` : ''
+    const safeLimit = Number.isFinite(options.limit) && options.limit! > 0 ? Math.floor(options.limit!) : 100
+    const safeOffset = Number.isFinite(options.offset) && options.offset! >= 0 ? Math.floor(options.offset!) : 0
 
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM knowledge_item ${where}
       ORDER BY ${sortCol} ${sortDir}
-      ${limit} ${offset}
-    `).all(...params) as any[]
+      LIMIT ? OFFSET ?
+    `
+      )
+      .all(...params, safeLimit, safeOffset) as any[]
 
     return rows.map(this.mapRow)
   }
@@ -192,11 +234,15 @@ export class KnowledgeService {
    * 获取所有分类
    */
   getCategories(): Array<{ category: string; count: number }> {
-    return this.db.prepare(`
+    return this.db
+      .prepare(
+        `
       SELECT category, COUNT(*) as count FROM knowledge_item
       WHERE status = 'active' AND category IS NOT NULL
       GROUP BY category ORDER BY count DESC
-    `).all() as any[]
+    `
+      )
+      .all() as any[]
   }
 
   /**
@@ -221,9 +267,9 @@ export class KnowledgeService {
       content: row.content,
       summary: row.summary || undefined,
       category: row.category || undefined,
-      tags: row.tags ? JSON.parse(row.tags) : [],
-      sourceSessionIds: row.source_session_ids ? JSON.parse(row.source_session_ids) : [],
-      sourceMessageRefs: row.source_message_refs ? JSON.parse(row.source_message_refs) : [],
+      tags: safeJsonParse(row.tags, []),
+      sourceSessionIds: safeJsonParse(row.source_session_ids, []),
+      sourceMessageRefs: safeJsonParse(row.source_message_refs, []),
       confidence: row.confidence,
       isEdited: Boolean(row.is_edited),
       viewCount: row.view_count,
@@ -232,7 +278,7 @@ export class KnowledgeService {
       createdTs: row.created_ts,
       updatedTs: row.updated_ts,
       version: row.version,
-      parentId: row.parent_id || undefined,
+      parentId: row.parent_id ?? undefined,
     }
   }
 }

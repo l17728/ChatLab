@@ -12,7 +12,8 @@ import type { IpcContext } from './types'
 import { CURRENT_SCHEMA_VERSION, getPendingMigrationInfos } from '../database/migrations'
 import { exportSessionToTempFile, cleanupTempExportFiles } from '../merger'
 import { t } from '../i18n'
-import { startTaskExtraction, startGraphExtraction, startFaqExtraction, startFocusExtraction } from '../services/extractionRunner'
+import { startUnifiedExtraction } from '../services/extractionRunner'
+import { getGlobalNicknames } from '../identity/cache'
 
 /**
  * 注册聊天记录相关 IPC 处理器
@@ -109,6 +110,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 导入聊天记录（流式版本）
    */
   ipcMain.handle('chat:import', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       // Send progress: detecting format (message not used by frontend, stage-based translation)
       win.webContents.send('chat:importProgress', {
@@ -135,17 +137,8 @@ export function registerChatHandlers(ctx: IpcContext): void {
         // 异步触发 AI 提取（不阻塞导入结果返回）
         if (result.sessionId) {
           setImmediate(() => {
-            startTaskExtraction(result.sessionId!, win).catch((err) => {
-              console.error('[IpcMain] Task extraction failed:', err)
-            })
-            startGraphExtraction(result.sessionId!, win).catch((err) => {
-              console.error('[IpcMain] Graph extraction failed:', err)
-            })
-            startFaqExtraction(result.sessionId!, win).catch((err) => {
-              console.error('[IpcMain] FAQ extraction failed:', err)
-            })
-            startFocusExtraction(result.sessionId!, win).catch((err) => {
-              console.error('[IpcMain] Focus extraction failed:', err)
+            startUnifiedExtraction(result.sessionId!, win, false, getGlobalNicknames()).catch((err) => {
+              console.error('[IpcMain] Unified extraction failed:', err)
             })
             // 身份识别 Layer 2：导入后提示用户配置身份
             win.webContents.send('collab:suggestIdentitySetup', { sessionId: result.sessionId })
@@ -196,6 +189,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 检测文件格式（轻量级，仅返回格式 ID、名称和是否多聊天）
    */
   ipcMain.handle('chat:detectFormat', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) return null
     try {
       const formatFeature = detectFormat(filePath)
       if (!formatFeature) return null
@@ -215,6 +209,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 自动检测格式并调用对应格式的 scanChats
    */
   ipcMain.handle('chat:scanMultiChatFile', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       const chats = await scanMultiChatFile(filePath)
       return { success: true, chats }
@@ -229,6 +224,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 用于多聊天格式等需要额外参数的场景（如指定 chatIndex）
    */
   ipcMain.handle('chat:importWithOptions', async (_, filePath: string, formatOptions: Record<string, unknown>) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       win.webContents.send('chat:importProgress', {
         stage: 'detecting',
@@ -511,7 +507,12 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 获取支持的格式列表
    */
   ipcMain.handle('chat:getSupportedFormats', async () => {
-    return parser.getSupportedFormats()
+    try {
+      return parser.getSupportedFormats()
+    } catch (error) {
+      console.error('[IpcMain] chat:getSupportedFormats failed:', error)
+      return []
+    }
   })
 
   /**
@@ -699,11 +700,14 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 插件参数化只读 SQL 查询
    */
   ipcMain.handle('chat:pluginQuery', async (_, sessionId: string, sql: string, params: any[]) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'invalid sessionId' }
+    if (typeof sql !== 'string' || !sql) return { success: false, error: 'invalid sql' }
+    if (!Array.isArray(params)) return { success: false, error: 'params must be array' }
     try {
       return await worker.pluginQuery(sessionId, sql, params)
     } catch (error) {
       console.error('[IpcMain] Plugin query failed:', error)
-      throw error
+      return { success: false, error: 'Plugin query failed' }
     }
   })
 
@@ -711,11 +715,14 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 插件计算卸载（纯函数在 Worker 中执行）
    */
   ipcMain.handle('chat:pluginCompute', async (_, fnString: string, input: any) => {
+    if (typeof fnString !== 'string' || !fnString.trim()) {
+      return { success: false, error: 'invalid fnString' }
+    }
     try {
       return await worker.pluginCompute(fnString, input)
     } catch (error) {
       console.error('[IpcMain] Plugin compute failed:', error)
-      throw error
+      return { success: false, error: 'Plugin compute failed' }
     }
   })
 
@@ -725,11 +732,13 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 执行用户 SQL 查询
    */
   ipcMain.handle('chat:executeSQL', async (_, sessionId: string, sql: string) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { error: 'invalid sessionId' }
+    if (typeof sql !== 'string' || !sql) return { error: 'invalid sql' }
     try {
       return await worker.executeRawSQL(sessionId, sql)
     } catch (error) {
       console.error('Failed to execute SQL:', error)
-      throw error
+      return { error: 'SQL execution failed' }
     }
   })
 
@@ -755,7 +764,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
       return await worker.generateSessions(sessionId, gapThreshold)
     } catch (error) {
       console.error('Failed to generate session index:', error)
-      throw error
+      return { success: false, error: 'Session generation failed' }
     }
   })
 
@@ -891,6 +900,8 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 根据时间范围查询会话列表
    */
   ipcMain.handle('session:getByTimeRange', async (_, dbSessionId: string, startTs: number, endTs: number) => {
+    if (typeof dbSessionId !== 'string' || !dbSessionId) return []
+    if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) return []
     console.log('[session:getByTimeRange] Query params:', { dbSessionId, startTs, endTs })
     console.log('[session:getByTimeRange] Time range:', {
       start: new Date(startTs * 1000).toISOString(),
@@ -948,7 +959,9 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 获取最近 N 条会话
    */
   ipcMain.handle('session:getRecent', async (_, dbSessionId: string, limit: number) => {
-    console.log('[session:getRecent] Query params:', { dbSessionId, limit })
+    if (typeof dbSessionId !== 'string' || !dbSessionId) return []
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 20
+    console.log('[session:getRecent] Query params:', { dbSessionId, limit: safeLimit })
     try {
       const db = databaseCore.openDatabase(dbSessionId, true)
       if (!db) {
@@ -978,7 +991,7 @@ export function registerChatHandlers(ctx: IpcContext): void {
           LIMIT ?
         `
         )
-        .all(limit) as Array<{
+        .all(safeLimit) as Array<{
         id: number
         startTs: number
         endTs: number
@@ -1000,6 +1013,8 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 分析增量导入（检测去重后能新增多少消息）
    */
   ipcMain.handle('chat:analyzeIncrementalImport', async (_, sessionId: string, filePath: string) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'invalid sessionId' }
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       // 检测文件格式
       const formatFeature = detectFormat(filePath)
@@ -1026,6 +1041,8 @@ export function registerChatHandlers(ctx: IpcContext): void {
    * 执行增量导入
    */
   ipcMain.handle('chat:incrementalImport', async (_, sessionId: string, filePath: string) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'invalid sessionId' }
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'invalid filePath' }
     try {
       // 发送进度
       win.webContents.send('chat:importProgress', {
@@ -1051,17 +1068,8 @@ export function registerChatHandlers(ctx: IpcContext): void {
         }
         // 异步触发 AI 提取（增量数据也需要重新分析）
         setImmediate(() => {
-          startTaskExtraction(sessionId, win).catch((err) => {
-            console.error('[IpcMain] Incremental task extraction failed:', err)
-          })
-          startGraphExtraction(sessionId, win).catch((err) => {
-            console.error('[IpcMain] Incremental graph extraction failed:', err)
-          })
-          startFaqExtraction(sessionId, win).catch((err) => {
-            console.error('[IpcMain] Incremental FAQ extraction failed:', err)
-          })
-          startFocusExtraction(sessionId, win).catch((err) => {
-            console.error('[IpcMain] Incremental focus extraction failed:', err)
+          startUnifiedExtraction(sessionId, win, false, getGlobalNicknames()).catch((err) => {
+            console.error('[IpcMain] Incremental unified extraction failed:', err)
           })
         })
       }

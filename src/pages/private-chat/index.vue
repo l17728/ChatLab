@@ -23,6 +23,7 @@ import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useTimeSelect } from '@/composables'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
+import { getApiClient } from '@/api/client'
 
 const { t } = useI18n()
 

@@ -37,9 +37,32 @@ import { launchApp } from './helpers/app-launcher'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { execSync } from 'child_process'
 
-// CON 套件使用独立端口 9872，避免与 REG 套件的 9871 端口冲突（TIME_WAIT）
-const WEB_UI_PORT = 9872
+/** 核心原则：强制终止所有 Electron 进程 */
+function forceKillElectron() {
+  try {
+    execSync('powershell -Command "Stop-Process -Name electron -Force -ErrorAction SilentlyContinue"', {
+      stdio: 'ignore',
+      timeout: 5000,
+    })
+  } catch {
+    /* 没有进程 */
+  }
+}
+
+// System userData path (Electron reads from here on Windows)
+const SYSTEM_USERDATA = path.join(os.homedir(), 'AppData', 'Roaming', 'ChatLab')
+const SYSTEM_SETTINGS_DIR = path.join(SYSTEM_USERDATA, 'data', 'settings')
+const SYSTEM_API_CONFIG = path.join(SYSTEM_SETTINGS_DIR, 'api-server.json')
+
+function writeSystemApiConfig(config: object) {
+  fs.mkdirSync(SYSTEM_SETTINGS_DIR, { recursive: true })
+  fs.writeFileSync(SYSTEM_API_CONFIG, JSON.stringify(config, null, 2), 'utf-8')
+}
+
+// CON 套件与 REG 套件共用端口 9871（系统 userData 默认端口）
+const WEB_UI_PORT = 9871
 const API_BASE = `http://127.0.0.1:${WEB_UI_PORT}`
 const WEB_UI_URL = `http://localhost:${WEB_UI_PORT}`
 
@@ -52,19 +75,19 @@ async function waitForPortFree(timeoutMs = 15_000): Promise<void> {
     try {
       await fetch(`${API_BASE}/api/v1/status`, { signal: AbortSignal.timeout(500) })
       // 还能连上，继续等
-      await new Promise(r => setTimeout(r, 500))
+      await new Promise((r) => setTimeout(r, 500))
     } catch {
       // 连不上了，端口已断开——再等 3s 让 TCP TIME_WAIT 结束
-      await new Promise(r => setTimeout(r, 3000))
+      await new Promise((r) => setTimeout(r, 3000))
       return
     }
   }
   // 超时也额外等 3s，防止 TIME_WAIT 问题
-  await new Promise(r => setTimeout(r, 3000))
+  await new Promise((r) => setTimeout(r, 3000))
 }
 
 /** 等待 API server 就绪（轮询） */
-async function waitForApiServer(timeoutMs = 30_000): Promise<void> {
+async function waitForApiServer(timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
@@ -73,8 +96,10 @@ async function waitForApiServer(timeoutMs = 30_000): Promise<void> {
         console.log('[Consistency] API server 就绪')
         return
       }
-    } catch { /* 还未就绪 */ }
-    await new Promise(r => setTimeout(r, 500))
+    } catch {
+      /* 还未就绪 */
+    }
+    await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`[Consistency] API server 在 ${timeoutMs}ms 内未就绪`)
 }
@@ -82,32 +107,28 @@ async function waitForApiServer(timeoutMs = 30_000): Promise<void> {
 /** 通过 CDP 连接已启动的 Electron */
 async function connectElectron(cdpPort: number): Promise<{ browser: Browser; ctx: BrowserContext; page: Page }> {
   const browser = await chromium.connectOverCDP(`http://localhost:${cdpPort}`)
-  const ctx = browser.contexts()[0] ?? await browser.newContext()
-  const page = ctx.pages()[0] ?? await ctx.newPage()
+  const ctx = browser.contexts()[0] ?? (await browser.newContext())
+  const page = ctx.pages()[0] ?? (await ctx.newPage())
   return { browser, ctx, page }
 }
 
-/** 创建带预写配置的临时 userData 目录并启动应用 */
+/** 创建临时 userData 目录并启动应用（写入系统 userData 配置） */
 async function startApp() {
   const userDataDir = path.join(os.tmpdir(), `chatlab-con-${Date.now()}`)
   fs.mkdirSync(userDataDir, { recursive: true })
 
-  const settingsDir = path.join(userDataDir, 'data', 'settings')
-  fs.mkdirSync(settingsDir, { recursive: true })
-
   const apiConfig = {
     enabled: true,
-    port: WEB_UI_PORT,  // 9872 — 独立于 REG 套件的 9871
+    port: WEB_UI_PORT, // 9871 — 系统默认端口
     token: 'test-token-consistency',
     createdAt: Math.floor(Date.now() / 1000),
   }
-  fs.writeFileSync(
-    path.join(settingsDir, 'api-server.json'),
-    JSON.stringify(apiConfig, null, 2),
-    'utf-8'
-  )
 
-  const app = await launchApp({ userDataDir, startupWaitTime: 5000 })
+  // Write to SYSTEM userData where Electron actually reads the config
+  writeSystemApiConfig(apiConfig)
+  console.log('[Consistency] 已写入系统 api-server.json:', apiConfig)
+
+  const app = await launchApp({ userDataDir, startupWaitTime: 8000 })
   await waitForApiServer()
   const { browser: electronBrowser, ctx: electronCtx, page: electronPage } = await connectElectron(app.port)
 
@@ -117,14 +138,28 @@ async function startApp() {
 /** 通过 HTTP 获取助手列表 */
 async function fetchAssistants(): Promise<any[]> {
   const res = await fetch(`${API_BASE}/api/v1/assistants`)
-  const json = await res.json() as any
+  const json = (await res.json()) as any
   return json.data || []
 }
 
-/** 通过 HTTP 获取会话列表 */
-async function fetchSessions(): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/api/webui/sessions`)
-  const json = await res.json() as any
+/** 通过 HTTP 获取会话列表（需要认证） */
+async function fetchSessions(token?: string): Promise<any[]> {
+  // Authenticate if no token provided
+  if (!token) {
+    const loginRes = await fetch(`${API_BASE}/api/webui/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    })
+    if (loginRes.ok) {
+      const loginBody = (await loginRes.json()) as any
+      token = loginBody.data?.token
+    }
+  }
+  const res = await fetch(`${API_BASE}/api/webui/sessions`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  const json = (await res.json()) as any
   return json.data || []
 }
 
@@ -158,10 +193,36 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
   })
 
   test.afterAll(async () => {
-    try { await webBrowser?.close() } catch { /* ignore */ }
-    try { await handle.electronBrowser.close() } catch { /* ignore */ }
-    await handle.app.close()
-    try { fs.rmSync(handle.userDataDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    try {
+      await webBrowser?.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      await handle.electronBrowser.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      await handle.app.close()
+    } catch {
+      /* ignore */
+    }
+    // 核心原则：强制终止所有 Electron 进程
+    forceKillElectron()
+    await new Promise((r) => setTimeout(r, 2000))
+    // Restore system config to valid state
+    writeSystemApiConfig({
+      enabled: true,
+      port: WEB_UI_PORT,
+      token: 'test-token-consistency',
+      createdAt: Math.floor(Date.now() / 1000),
+    })
+    try {
+      fs.rmSync(handle.userDataDir, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
   })
 
   // ─── CON-001/002: 会话列表一致性 ─────────────────────────────────
@@ -174,7 +235,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // Desktop Electron 内部也通过同一个 API（或 IPC） 获取会话
     // 我们验证两者都使用同一数据源，数量一致
     const res2 = await fetch(`${API_BASE}/api/v1/sessions`)
-    const json2 = await res2.json() as any
+    const json2 = (await res2.json()) as any
     const v1Sessions: any[] = json2.data || []
     console.log('[CON-001] v1 会话数:', v1Sessions.length)
 
@@ -186,7 +247,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
   test('CON-002: 会话数据字段 WebUI 和 v1 API 格式一致（id/name/platform）', async () => {
     const webSessions = await fetchSessions()
     const v1Res = await fetch(`${API_BASE}/api/v1/sessions`)
-    const v1Json = await v1Res.json() as any
+    const v1Json = (await v1Res.json()) as any
     const v1Sessions: any[] = v1Json.data || []
 
     // 如果有会话，检查字段结构一致
@@ -208,7 +269,10 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
 
   test('CON-003: WebUI HTTP API 返回通用分析助手（中文、英文、日文）', async () => {
     const assistants = await fetchAssistants()
-    console.log('[CON-003] 所有助手 id:', assistants.map(a => a.id))
+    console.log(
+      '[CON-003] 所有助手 id:',
+      assistants.map((a) => a.id)
+    )
 
     const ids = assistants.map((a: any) => a.id)
     expect(ids).toContain('general_cn')
@@ -219,14 +283,14 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
   test('CON-004: Desktop API 和 WebUI API 返回完全相同的助手集合', async () => {
     // WebUI 访问
     const webRes = await fetch(`${API_BASE}/api/v1/assistants`)
-    const webJson = await webRes.json() as any
+    const webJson = (await webRes.json()) as any
     const webAssistants: any[] = webJson.data || []
 
     // 同一个服务端，用不同 header 模拟 Desktop 请求
     const desktopRes = await fetch(`${API_BASE}/api/v1/assistants`, {
-      headers: { 'X-Source': 'desktop-test' }
+      headers: { 'X-Source': 'desktop-test' },
     })
-    const desktopJson = await desktopRes.json() as any
+    const desktopJson = (await desktopRes.json()) as any
     const desktopAssistants: any[] = desktopJson.data || []
 
     const webIds = webAssistants.map((a: any) => a.id).sort()
@@ -266,7 +330,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
 
   test('CON-007: 中文助手(general_cn)有正确的 supportedLocales 过滤配置', async () => {
     const res = await fetch(`${API_BASE}/api/v1/assistants/general_cn`)
-    const json = await res.json() as any
+    const json = (await res.json()) as any
     const assistant = json.data
 
     console.log('[CON-007] general_cn supportedLocales:', assistant.supportedLocales)
@@ -287,7 +351,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     expect(currentUrl).not.toBe(WEB_UI_URL + '/')
     // 应该包含已知路径
     const validPaths = ['/dashboard', '/login', '/group-chat', '/private-chat', '/settings']
-    const hasValidPath = validPaths.some(p => currentUrl.includes(p))
+    const hasValidPath = validPaths.some((p) => currentUrl.includes(p))
     expect(hasValidPath).toBe(true)
   })
 
@@ -305,8 +369,8 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // 助手列表是全局的，不依赖特定会话
     const res1 = await fetch(`${API_BASE}/api/v1/assistants`)
     const res2 = await fetch(`${API_BASE}/api/v1/assistants`)
-    const json1 = await res1.json() as any
-    const json2 = await res2.json() as any
+    const json1 = (await res1.json()) as any
+    const json2 = (await res2.json()) as any
 
     const ids1 = (json1.data || []).map((a: any) => a.id).sort()
     const ids2 = (json2.data || []).map((a: any) => a.id).sort()
@@ -325,7 +389,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // assistants.value = json.data || []
     // 所以 data 字段必须是数组
     const res = await fetch(`${API_BASE}/api/v1/assistants`)
-    const json = await res.json() as any
+    const json = (await res.json()) as any
     expect(json.success).toBe(true)
     expect(Array.isArray(json.data)).toBe(true)
     expect(json.data).toEqual(assistants)
@@ -333,8 +397,19 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
   })
 
   test('CON-012: /api/webui/sessions 响应格式与 sessionStore.loadSessions() 期望一致', async () => {
-    const res = await fetch(`${API_BASE}/api/webui/sessions`)
-    const json = await res.json() as any
+    // Authenticate first to get a valid token
+    const loginRes = await fetch(`${API_BASE}/api/webui/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    })
+    const loginBody = (await loginRes.json()) as any
+    const token = loginBody.data?.token
+
+    const res = await fetch(`${API_BASE}/api/webui/sessions`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    const json = (await res.json()) as any
 
     // sessionStore.loadSessions() 在 WebUI 模式下的提取逻辑：
     // const sessionsData = json.data ?? json.sessions ?? []
@@ -373,7 +448,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
 
   test('CON-015: WebUI 侧边栏版本 API 返回服务端版本信息', async () => {
     const res = await fetch(`${API_BASE}/api/v1/status`)
-    const json = await res.json() as any
+    const json = (await res.json()) as any
     console.log('[CON-015] status:', json)
     // API 状态接口应返回 ok
     expect(res.ok).toBe(true)
@@ -383,8 +458,8 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // 此测试验证代码定义的 Tab 顺序与期望一致（防止回归）
     // 直接通过 API 验证相关数据接口都能正常响应
     const tabRelatedEndpoints = [
-      `${API_BASE}/api/v1/sessions`,          // overview/view: 会话数据
-      `${API_BASE}/api/v1/assistants`,         // ai-chat: 助手数据
+      `${API_BASE}/api/v1/sessions`, // overview/view: 会话数据
+      `${API_BASE}/api/v1/assistants`, // ai-chat: 助手数据
     ]
     for (const url of tabRelatedEndpoints) {
       const res = await fetch(url)
@@ -443,10 +518,11 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
 
   test('CON-020: /api/v1/assistants 至少包含三个通用助手（cn/en/ja）', async () => {
     const assistants = await fetchAssistants()
-    const generalAssistants = assistants.filter((a: any) =>
-      ['general_cn', 'general_en', 'general_ja'].includes(a.id)
+    const generalAssistants = assistants.filter((a: any) => ['general_cn', 'general_en', 'general_ja'].includes(a.id))
+    console.log(
+      '[CON-020] 通用助手:',
+      generalAssistants.map((a: any) => `${a.id}(${a.name})`)
     )
-    console.log('[CON-020] 通用助手:', generalAssistants.map((a: any) => `${a.id}(${a.name})`))
     expect(generalAssistants.length).toBe(3)
 
     // 确保每个通用助手的名称非空
@@ -479,13 +555,14 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // 导航到根路由触发重新渲染
     try {
       await webPage.goto(WEB_UI_URL, { waitUntil: 'networkidle', timeout: 15_000 })
-    } catch { /* 忽略超时 */ }
+    } catch {
+      /* 忽略超时 */
+    }
 
     // 过滤掉已知的非关键错误
-    const criticalErrors = errors.filter(e =>
-      !e.includes('ResizeObserver') &&
-      !e.includes('Non-Error promise rejection') &&
-      !e.includes('ChunkLoadError')
+    const criticalErrors = errors.filter(
+      (e) =>
+        !e.includes('ResizeObserver') && !e.includes('Non-Error promise rejection') && !e.includes('ChunkLoadError')
     )
     console.log('[CON-022] 页面严重错误:', criticalErrors)
     expect(criticalErrors).toHaveLength(0)
@@ -495,11 +572,11 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
     // 等待 Electron 页面渲染完成
     try {
       await handle.electronPage.waitForLoadState('networkidle', { timeout: 10_000 })
-    } catch { /* 忽略超时 */ }
+    } catch {
+      /* 忽略超时 */
+    }
 
-    const childCount = await handle.electronPage.evaluate(
-      () => document.querySelector('#app')?.children.length ?? 0
-    )
+    const childCount = await handle.electronPage.evaluate(() => document.querySelector('#app')?.children.length ?? 0)
     console.log('[CON-023] Desktop #app 子元素数量:', childCount)
     expect(childCount).toBeGreaterThan(0)
   })
@@ -507,7 +584,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
   test('CON-024: WebUI 和 Desktop 助手 API 的 systemPrompt 内容一致', async () => {
     // 通用中文助手的 systemPrompt 在两个客户端应完全一致（同一服务端）
     const res = await fetch(`${API_BASE}/api/v1/assistants/general_cn`)
-    const json = await res.json() as any
+    const json = (await res.json()) as any
     const prompt = json.data?.systemPrompt
 
     expect(typeof prompt).toBe('string')
@@ -516,7 +593,7 @@ test.describe('WebUI vs Desktop UI 一致性测试', () => {
 
     // 再次请求，确保内容稳定（无随机化）
     const res2 = await fetch(`${API_BASE}/api/v1/assistants/general_cn`)
-    const json2 = await res2.json() as any
+    const json2 = (await res2.json()) as any
     expect(json2.data?.systemPrompt).toBe(prompt)
   })
 

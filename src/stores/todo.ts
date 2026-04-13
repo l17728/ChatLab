@@ -5,7 +5,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { PersonalTodo } from '@/electron/main/services/todoService'
+import type { PersonalTodo } from '@electron/main/services/todoService'
 
 export interface TodoFilter {
   status?: string[]

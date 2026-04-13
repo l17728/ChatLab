@@ -29,7 +29,9 @@ const electronMock = {
     off: () => {},
   },
   BrowserWindow: class {
-    static getAllWindows() { return [] }
+    static getAllWindows() {
+      return []
+    }
   },
 }
 
@@ -130,7 +132,7 @@ server.addHook('onRequest', async (request, reply) => {
       // Token is valid - attach user info to request
       request.user = {
         userId: payload.userId || 'webui-user',
-        username: payload.username || 'webui-user'
+        username: payload.username || 'webui-user',
       }
     } catch (error) {
       return reply.code(401).send({ error: 'Unauthorized', code: 'AUTH_REQUIRED' })
@@ -198,7 +200,7 @@ server.post('/api/webui/auth/login', async (request, reply) => {
   }
 
   const db = loadUsers()
-  const user = db.users.find(u => u.username === username && u.isActive !== false)
+  const user = db.users.find((u) => u.username === username && u.isActive !== false)
 
   if (!user) {
     return reply.code(401).send({ error: 'Invalid credentials' })
@@ -210,7 +212,7 @@ server.post('/api/webui/auth/login', async (request, reply) => {
   }
 
   // Generate JWT token (matching auth-db.ts generateToken() format)
-  const TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000  // 7 days
+  const TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
   const expiresAt = Math.floor((Date.now() + TOKEN_EXPIRY_MS) / 1000)
   const payload = Buffer.from(
@@ -230,7 +232,7 @@ server.post('/api/webui/auth/login', async (request, reply) => {
     success: true,
     token: jwtToken,
     user: { id: user.id, username: user.username },
-    expiresAt: Date.now() + TOKEN_EXPIRY_MS
+    expiresAt: Date.now() + TOKEN_EXPIRY_MS,
   })
 })
 
@@ -246,8 +248,8 @@ server.get('/api/webui/sessions', async (request, reply) => {
     data: [],
     meta: {
       timestamp: Math.floor(Date.now() / 1000),
-      version: '0.0.2'
-    }
+      version: '0.0.2',
+    },
   })
 })
 
@@ -259,8 +261,8 @@ server.get('/api/webui/sessions/:sessionId', async (request, reply) => {
     success: false,
     error: {
       code: 'SESSION_NOT_FOUND',
-      message: `Session ${sessionId} not found`
-    }
+      message: `Session ${sessionId} not found`,
+    },
   })
 })
 
@@ -270,7 +272,7 @@ server.get('/api/system/status', async (_request, reply) => {
     running: true,
     port: PORT,
     startedAt: Math.floor(Date.now() / 1000),
-    version: '1.0.0'
+    version: '1.0.0',
   })
 })
 

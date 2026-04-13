@@ -341,7 +341,8 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
         const json = await res.json()
         members = json.data || []
       } else {
-        members = await window.chatApi.getMembers(state.sessionId)
+        // getMembers 返回 MemberWithStats[]，这里只消费 platformId/groupNickname/accountName 三个字段
+        members = (await window.chatApi.getMembers(state.sessionId)) as typeof members
       }
       const ownerMember = members.find((member) => member.platformId === ownerId)
       state.ownerInfo = ownerMember
