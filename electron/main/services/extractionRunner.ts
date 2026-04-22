@@ -13,6 +13,7 @@ import { focusService } from './focusService'
 import { todoService } from './todoService'
 import { extractionJobService } from '../database/global/extraction'
 import { getActiveConfig, buildPiModel } from '../ai/llm'
+import { testLLMConnection } from '../ai/llm/preflight'
 import { logAnalysis } from '../ai/analysisLog'
 import {
   completeSimple,
@@ -1428,26 +1429,11 @@ export async function startUnifiedExtraction(
     `startUnifiedExtraction ENTRY: sessionId=${sessionId} forceRerun=${forceRerun} nicknames=[${globalNicknames.join(', ')}]`
   )
 
-  // 预检 LLM 配置——新环境最常见的失败点：根本没有激活的 LLM
-  const preflightConfig = getActiveConfig()
-  if (!preflightConfig) {
-    logAnalysis(
-      'error',
-      'ABORTED: 没有激活的 LLM 配置。请在"设置 → AI 模型配置"里新增并激活一个服务商。'
-    )
-    return
-  }
-  const apiKeyMasked = preflightConfig.apiKey
-    ? `${preflightConfig.apiKey.slice(0, 4)}...(len=${preflightConfig.apiKey.length})`
-    : '(空)'
-  logAnalysis(
-    'info',
-    `LLM config OK: provider=${preflightConfig.provider} model=${preflightConfig.model || '(默认)'} baseUrl=${preflightConfig.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
-  )
-
+  // 注意：这里不能在 createJob 之前 early return——IPC 调用方已经创建过 job。
+  // 必须先拿到 job 引用，任何失败都要 failJob + 发 extractionError 事件，
+  // 否则前端进度条会永远卡在"pending"。
   const job = await extractionJobService.createJob(sessionId, 'all', forceRerun)
 
-  // 不再因"已完成"而短路——允许反复重跑，由下游保存阶段的 dedup 兜底。
   // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
   if (job.status === 'running') {
     logAnalysis(
@@ -1459,6 +1445,50 @@ export async function startUnifiedExtraction(
 
   logAnalysis('info', `Starting job ${job.id} (status=${job.status})`)
   extractionJobService.startJob(job.id)
+
+  // ========== LLM 预检 ==========
+  // 跑一次最小化 completeSimple 请求，提前捕捉：
+  //   - 没激活配置 / API Key 为空 / model 名错
+  //   - baseUrl 不通 / apiKey 鉴权失败 / 429 配额
+  // 任何失败都 failJob 并通过 collab:extractionError 事件告诉渲染进程，
+  // reason 字段让前端按 LLM_NOT_CONFIGURED / LLM_UNREACHABLE 分支弹窗。
+  const activeConfig = getActiveConfig()
+  const apiKeyMasked = activeConfig?.apiKey
+    ? `${activeConfig.apiKey.slice(0, 4)}...(len=${activeConfig.apiKey.length})`
+    : '(空)'
+  logAnalysis(
+    'info',
+    `LLM preflight start: provider=${activeConfig?.provider ?? '(无配置)'} model=${activeConfig?.model || '(默认)'} baseUrl=${activeConfig?.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
+  )
+  // 预检用较短超时（8s），不挡分析太久；真实分析各批次仍 120s
+  const preflight = await testLLMConnection({ timeoutMs: 8000 })
+  if (!preflight.success) {
+    const reason =
+      preflight.details.phase === 'config' || preflight.details.phase === 'apikey'
+        ? 'LLM_NOT_CONFIGURED'
+        : preflight.details.phase === 'model_build'
+          ? 'LLM_CONFIG_INVALID'
+          : 'LLM_UNREACHABLE'
+    logAnalysis(
+      'error',
+      `LLM 预检失败（phase=${preflight.details.phase}, reason=${reason}）: ${preflight.error}`,
+      preflight.details
+    )
+    extractionJobService.failJob(job.id, reason, preflight.error || 'LLM preflight failed')
+    win.webContents.send('collab:extractionError', {
+      jobId: job.id,
+      sessionId,
+      jobType: 'all',
+      reason,
+      error: preflight.error,
+      details: preflight.details,
+    })
+    return
+  }
+  logAnalysis(
+    'info',
+    `✅ LLM preflight OK: provider=${preflight.details.provider} model=${preflight.details.model} llmElapsed=${preflight.details.llmElapsed}ms`
+  )
 
   // 单调棘轮：由于批次滑窗重叠（batchSize=30, overlap=5）+ token 流式回调与批次完成
   // 计算基准不同（i 与 end），进度值在相邻事件之间会短暂回退（例如 30 → 25）。

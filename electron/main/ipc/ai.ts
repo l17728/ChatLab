@@ -10,6 +10,7 @@ import { getLogsDir } from '../paths'
 import { Agent, type AgentStreamChunk, type SkillContext } from '../ai/agent'
 import { getDefaultGeneralAssistantId } from '../ai/assistant/defaultGeneral'
 import { getActiveConfig, buildPiModel } from '../ai/llm'
+import { testLLMConnection, formatAIError } from '../ai/llm/preflight'
 import * as assistantManager from '../ai/assistant'
 import type { AssistantConfig } from '../ai/assistant/types'
 import * as skillManager from '../ai/skills'
@@ -37,98 +38,6 @@ function toPiSimpleMessages(messages: Array<{ role: string; content: string }>, 
 // ==================== AI Agent 请求追踪 ====================
 // 用于跟踪活跃的 Agent 请求，支持中止操作
 const activeAgentRequests = new Map<string, AbortController>()
-
-/**
- * 格式化 AI 报错信息，输出更友好的提示
- */
-function formatAIError(error: unknown): string {
-  const candidates: unknown[] = []
-  if (error) {
-    candidates.push(error)
-  }
-
-  const errorObj = error as {
-    lastError?: unknown
-    errors?: unknown[]
-  }
-
-  if (errorObj?.lastError) {
-    candidates.push(errorObj.lastError)
-  }
-
-  if (Array.isArray(errorObj?.errors)) {
-    candidates.push(...errorObj.errors)
-  }
-
-  let rawMessage = ''
-  let statusCode: number | undefined
-  let retrySeconds: number | undefined
-
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== 'object') {
-      if (!rawMessage && typeof candidate === 'string') {
-        rawMessage = candidate
-      }
-      continue
-    }
-
-    const record = candidate as Record<string, unknown>
-    if (typeof record.statusCode === 'number') {
-      statusCode = record.statusCode
-    }
-
-    if (!rawMessage && typeof record.message === 'string') {
-      rawMessage = record.message
-    }
-
-    if (!rawMessage && record.data && typeof record.data === 'object') {
-      const data = record.data as { error?: { message?: string } }
-      if (data.error?.message) {
-        rawMessage = data.error.message
-      }
-    }
-
-    if (record.responseBody && typeof record.responseBody === 'string') {
-      const responseBody = record.responseBody
-      try {
-        const parsed = JSON.parse(responseBody) as { error?: { message?: string } }
-        if (!rawMessage && parsed.error?.message) {
-          rawMessage = parsed.error.message
-        }
-      } catch {
-        if (!rawMessage) {
-          rawMessage = responseBody
-        }
-      }
-    }
-
-    if (rawMessage) {
-      const retryMatch = rawMessage.match(/retry in ([0-9.]+)s/i)
-      if (retryMatch) {
-        retrySeconds = Math.ceil(Number(retryMatch[1]))
-      }
-    }
-  }
-
-  const fallbackMessage = rawMessage || String(error)
-  const lowerMessage = fallbackMessage.toLowerCase()
-
-  if (statusCode === 429 || lowerMessage.includes('quota') || lowerMessage.includes('resource_exhausted')) {
-    return retrySeconds
-      ? `Gemini quota exhausted, please retry after ${retrySeconds}s or upgrade your quota.`
-      : 'Gemini quota exhausted, please retry later or upgrade your quota.'
-  }
-
-  if (statusCode === 503 || lowerMessage.includes('overloaded') || lowerMessage.includes('unavailable')) {
-    return 'Gemini model is overloaded, please retry later.'
-  }
-
-  if (fallbackMessage.length > 300) {
-    return `${fallbackMessage.slice(0, 300)}...`
-  }
-
-  return fallbackMessage
-}
 
 export function registerAIHandlers({ win }: IpcContext): void {
   console.log('[IPC] Registering AI handlers...')
@@ -515,6 +424,27 @@ export function registerAIHandlers({ win }: IpcContext): void {
       console.error('[IpcMain] llm:hasConfig failed:', error)
       return false
     }
+  })
+
+  // ==================== LLM 连通性测试 ====================
+
+  /**
+   * 测试当前激活配置的 LLM 连通性
+   * 发送一个最小化请求来验证 API Key / Base URL / 模型是否可用
+   */
+  ipcMain.handle('llm:testConnection', async () => {
+    console.log('[AI-DEBUG] LLM 连通性测试开始（IPC）')
+    const result = await testLLMConnection()
+    if (result.success) {
+      console.log(
+        `[AI-DEBUG] 连通性测试成功（provider=${result.details.provider} model=${result.details.model}），LLM 耗时: ${result.details.llmElapsed}ms`
+      )
+    } else {
+      console.error(
+        `[AI-DEBUG] 连通性测试失败（phase=${result.details.phase}）: ${result.error}`
+      )
+    }
+    return result
   })
 
   // ==================== LLM 直接调用 API（SQLLab 等非 Agent 场景使用） ====================
@@ -926,23 +856,54 @@ export function registerAIHandlers({ win }: IpcContext): void {
           skillCtx
         )
 
+        // 安全发送 IPC 消息（窗口销毁保护）
+        const safeSend = (channel: string, data: unknown): boolean => {
+          if (win.isDestroyed()) {
+            console.error(`[AI-DEBUG] 窗口已销毁，无法发送 ${channel}，requestId: ${requestId}`)
+            aiLogger.error('IPC', `Window destroyed, cannot send ${channel}`, { requestId })
+            return false
+          }
+          try {
+            win.webContents.send(channel, data)
+            return true
+          } catch (error) {
+            console.error(`[AI-DEBUG] 发送 ${channel} 失败:`, error)
+            aiLogger.error('IPC', `Failed to send ${channel}`, { requestId, error: String(error) })
+            return false
+          }
+        }
+
         // 异步执行，通过事件发送流式数据
+        const ipcStartTime = Date.now()
         ;(async () => {
           try {
+            console.log(`[AI-DEBUG] Agent executeStream 开始，requestId: ${requestId}`)
+            let chunkCount = 0
             const result = await agent.executeStream(userMessage, (chunk: AgentStreamChunk) => {
               // 如果已中止，不再发送
               if (abortController.signal.aborted) {
                 return
               }
+              chunkCount++
               if (chunk.type === 'tool_start') {
+                console.log(`[AI-DEBUG] [IPC] Tool call: ${chunk.toolName}`, chunk.toolParams)
                 aiLogger.info('IPC', `Tool call: ${chunk.toolName}`, chunk.toolParams)
               }
-              win.webContents.send('agent:streamChunk', { requestId, chunk })
+              safeSend('agent:streamChunk', { requestId, chunk })
+            })
+
+            const elapsed = Date.now() - ipcStartTime
+            console.log(`[AI-DEBUG] Agent executeStream 完成，requestId: ${requestId}，耗时: ${elapsed}ms`, {
+              contentLength: result.content.length,
+              toolsUsed: result.toolsUsed,
+              toolRounds: result.toolRounds,
+              chunkCount,
+              totalUsage: result.totalUsage,
             })
 
             if (abortController.signal.aborted) {
               aiLogger.info('IPC', `Agent aborted: ${requestId}`)
-              win.webContents.send('agent:complete', {
+              safeSend('agent:complete', {
                 requestId,
                 result: {
                   content: result.content,
@@ -955,8 +916,18 @@ export function registerAIHandlers({ win }: IpcContext): void {
               return
             }
 
+            // 空结果警告
+            if (!result.content) {
+              console.warn(`[AI-DEBUG] ⚠️ Agent 返回空 content，requestId: ${requestId}，耗时: ${elapsed}ms`)
+              aiLogger.warn('IPC', `Agent returned empty content: ${requestId}`, {
+                toolsUsed: result.toolsUsed,
+                toolRounds: result.toolRounds,
+                elapsed,
+              })
+            }
+
             // 发送完成信息
-            win.webContents.send('agent:complete', {
+            safeSend('agent:complete', {
               requestId,
               result: {
                 content: result.content,
@@ -971,28 +942,32 @@ export function registerAIHandlers({ win }: IpcContext): void {
               toolRounds: result.toolRounds,
               contentLength: result.content.length,
               totalUsage: result.totalUsage,
+              elapsed,
             })
           } catch (error) {
+            const elapsed = Date.now() - ipcStartTime
             if (error instanceof Error && error.name === 'AbortError') {
               aiLogger.info('IPC', `Agent request aborted (error): ${requestId}`)
-              win.webContents.send('agent:complete', {
+              safeSend('agent:complete', {
                 requestId,
                 result: { content: '', toolsUsed: [], toolRounds: 0, aborted: true },
               })
               return
             }
             const friendlyError = formatAIError(error)
+            console.error(`[AI-DEBUG] Agent 执行异常，requestId: ${requestId}，耗时: ${elapsed}ms，error:`, error)
             aiLogger.error('IPC', `Agent execution error: ${requestId}`, {
               error: String(error),
               friendlyError,
+              elapsed,
             })
             // 发送错误 chunk
-            win.webContents.send('agent:streamChunk', {
+            safeSend('agent:streamChunk', {
               requestId,
               chunk: { type: 'error', error: friendlyError, isFinished: true },
             })
             // 发送完成事件（带错误信息），确保前端 promise 能 resolve
-            win.webContents.send('agent:complete', {
+            safeSend('agent:complete', {
               requestId,
               result: {
                 content: '',

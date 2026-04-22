@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
+import { useToast } from '@nuxt/ui/runtime/composables/useToast.js'
 import { useTaskStore } from '@/stores/task'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
@@ -16,6 +18,8 @@ const taskStore = useTaskStore()
 const sessionStore = useSessionStore()
 const layoutStore = useLayoutStore()
 const router = useRouter()
+const { t } = useI18n()
+const toast = useToast()
 const { filteredTasks, loading, statistics, filter } = storeToRefs(taskStore)
 const { sessions } = storeToRefs(sessionStore)
 
@@ -120,6 +124,52 @@ function setupExtractionListeners() {
   const onError = (_event: any, data: any) => {
     if (data.sessionId !== props.sessionId) return
     loadExtractionStatus()
+
+    // 预检失败 / 运行期报错都会走这里。按 reason 区分：
+    //   LLM_NOT_CONFIGURED  → 引导用户去设置页配置
+    //   LLM_CONFIG_INVALID  → 模型/baseUrl 填错
+    //   LLM_UNREACHABLE     → 网络 / API 限流 / 鉴权
+    //   其它                → 通用错误
+    const reason: string | undefined = data?.reason
+    const rawError: string | undefined = data?.error
+    let title = t('analysis.errorTitle')
+    let description = rawError || ''
+    let color: 'error' | 'warning' = 'error'
+    let actions: Array<{ label: string; onClick: () => void }> | undefined
+
+    if (reason === 'LLM_NOT_CONFIGURED') {
+      title = t('analysis.errorLLMNotConfigured')
+      description = t('analysis.errorLLMNotConfiguredDesc')
+      actions = [
+        {
+          label: t('layout.footer.settings'),
+          onClick: () => router.push({ name: 'settings' }),
+        },
+      ]
+    } else if (reason === 'LLM_CONFIG_INVALID') {
+      title = t('analysis.errorLLMConfigInvalid')
+      description = rawError || t('analysis.errorLLMNotConfiguredDesc')
+      actions = [
+        {
+          label: t('layout.footer.settings'),
+          onClick: () => router.push({ name: 'settings' }),
+        },
+      ]
+    } else if (reason === 'LLM_UNREACHABLE') {
+      title = t('analysis.errorLLMUnreachable')
+      // rawError 已经是 formatAIError 处理过的友好文案
+      description = rawError || ''
+      color = 'warning'
+    }
+
+    toast.add({
+      title,
+      description,
+      icon: 'i-heroicons-exclamation-circle',
+      color,
+      duration: 8000,
+      ...(actions ? { actions } : {}),
+    })
   }
 
   window.electron.ipcRenderer.on('collab:extractionProgress', onProgress)

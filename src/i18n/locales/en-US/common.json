@@ -21,6 +21,13 @@
   "regenerate": "Regenerate",
   "openFolder": "Open Folder",
   "errorNoAIConfig": "Please configure AI service in Settings first",
+  "analysis": {
+    "errorTitle": "AI analysis failed to start",
+    "errorLLMNotConfigured": "AI analysis failed to start: LLM not configured",
+    "errorLLMNotConfiguredDesc": "Please add and activate a working LLM provider in Settings → AI Model Configuration, then try again.",
+    "errorLLMConfigInvalid": "AI analysis failed to start: LLM configuration invalid",
+    "errorLLMUnreachable": "AI analysis failed to start: LLM unreachable"
+  },
   "reset": "Reset",
   "error": {
     "general": "Operation failed, please try again",

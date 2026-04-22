@@ -137,6 +137,9 @@ function initializeCollaborationDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_task_owner ON global_task(owner_global_user_id);
     CREATE INDEX IF NOT EXISTS idx_task_due ON global_task(due_ts);
     CREATE INDEX IF NOT EXISTS idx_task_created ON global_task(created_ts);
+    -- dedup 查询使用 LOWER(TRIM(title))，表达式索引让 findIdByNormalizedTitle 命中索引，
+    -- 避免重分析时 O(n) 全表扫（单次分析里会调几百到几千次）
+    CREATE INDEX IF NOT EXISTS idx_task_norm_title ON global_task(LOWER(TRIM(title)));
 
     -- 任务来源关联表
     CREATE TABLE IF NOT EXISTS task_source (
@@ -208,6 +211,8 @@ function initializeCollaborationDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_todo_status ON personal_todo(status, global_user_id);
     CREATE INDEX IF NOT EXISTS idx_todo_due ON personal_todo(due_ts);
     CREATE INDEX IF NOT EXISTS idx_todo_task ON personal_todo(task_id);
+    -- dedup: (global_user_id, 归一化 title) —— 覆盖 findIdByNormalizedTitle 查询
+    CREATE INDEX IF NOT EXISTS idx_todo_norm_title ON personal_todo(global_user_id, LOWER(TRIM(title)));
 
     -- 关注点表
     CREATE TABLE IF NOT EXISTS focus_item (
@@ -230,6 +235,9 @@ function initializeCollaborationDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_focus_user ON focus_item(global_user_id);
     CREATE INDEX IF NOT EXISTS idx_focus_type ON focus_item(type);
     CREATE INDEX IF NOT EXISTS idx_focus_status ON focus_item(status);
+    -- dedup: (global_user_id, type, 归一化 title)
+    CREATE INDEX IF NOT EXISTS idx_focus_norm_title
+      ON focus_item(global_user_id, type, LOWER(TRIM(title)));
 
     -- 关注点-消息关联
     CREATE TABLE IF NOT EXISTS focus_message_link (
