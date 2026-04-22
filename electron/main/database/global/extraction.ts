@@ -47,12 +47,14 @@ export class ExtractionJobService {
 
   /**
    * 创建或获取提取任务
-   * 去重逻辑：同一会话同类型的任务只允许一个活跃状态（pending/running）
+   * 互斥逻辑：同一会话同类型只允许一个"活跃"任务（pending/running）——防并发。
+   * 已完成（done/failed/cancelled）允许重跑，由保存阶段的 dedup 兜底。
+   * forceRerun 参数保留签名以兼容调用方，实际不再改变行为。
    */
-  async createJob(sessionId: string, jobType: JobType, forceRerun: boolean = false): Promise<ExtractionJob> {
+  async createJob(sessionId: string, jobType: JobType, _forceRerun: boolean = false): Promise<ExtractionJob> {
     const now = Date.now()
 
-    // 1. 检查是否已有活跃任务
+    // 检查是否已有活跃任务（并发互斥，不受 forceRerun 影响）
     const existingActive = this.db
       .prepare(
         `
@@ -67,24 +69,7 @@ export class ExtractionJobService {
       return existingActive
     }
 
-    // 2. 检查是否已完成
-    if (!forceRerun) {
-      const existingDone = this.db
-        .prepare(
-          `
-        SELECT * FROM extraction_job
-        WHERE session_id = ? AND job_type = ? AND status = 'done'
-        ORDER BY created_at DESC LIMIT 1
-      `
-        )
-        .get(sessionId, jobType) as ExtractionJob | undefined
-
-      if (existingDone) {
-        return existingDone
-      }
-    }
-
-    // 3. 创建新任务
+    // 创建新任务（已完成的历史记录保留作为审计轨迹，但每次调用都新建一个）
     const jobId = `extjob_${randomUUID()}`
     const job: ExtractionJob = {
       id: jobId,

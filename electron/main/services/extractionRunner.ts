@@ -1402,8 +1402,10 @@ export async function startUnifiedExtraction(
 ): Promise<void> {
   const job = await extractionJobService.createJob(sessionId, 'all', forceRerun)
 
-  if (!forceRerun && job.status === 'done') {
-    console.log('[ExtractionRunner] Unified extraction already done for session:', sessionId)
+  // 不再因"已完成"而短路——允许反复重跑，由下游保存阶段的 dedup 兜底。
+  // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
+  if (job.status === 'running') {
+    console.log('[ExtractionRunner] Unified extraction already in progress for session:', sessionId)
     return
   }
 
@@ -1433,45 +1435,19 @@ export async function startUnifiedExtraction(
       return
     }
 
-    let messages: ChatMessage[] = rawMessages.map((m: any) => ({
+    const messages: ChatMessage[] = rawMessages.map((m: any) => ({
       id: m.id,
       senderName: m.senderName || m.sender_name || '未知',
       content: m.content || '',
       timestamp: m.timestamp || m.ts || 0,
     }))
 
-    // ========== 增量分析 ==========
-    // 若上次有成功 job 且非 forceRerun，只处理 id > lastAnalyzedMessageId 的新消息
-    const lastDone = extractionJobService.getLatestDoneJob(sessionId, 'all')
-    const lastAnalyzedId = !forceRerun
-      ? (lastDone?.resultSummary?.lastAnalyzedMessageId as number | undefined)
-      : undefined
-    if (lastAnalyzedId !== undefined && lastAnalyzedId > 0) {
-      const before = messages.length
-      messages = messages.filter((m) => m.id > lastAnalyzedId)
-      console.log(
-        `[ExtractionRunner] Incremental mode: ${before} → ${messages.length} new messages (lastId=${lastAnalyzedId})`
-      )
-      if (messages.length === 0) {
-        extractionJobService.finishJob(job.id, {
-          lastAnalyzedMessageId: lastAnalyzedId,
-          mode: 'incremental-noop',
-        })
-        reportProgress(100, '无新消息，已是最新')
-        win.webContents.send('collab:extractionDone', {
-          jobId: job.id,
-          sessionId,
-          jobType: 'all',
-          result: { mode: 'noop', tasksExtracted: 0 },
-        })
-        return
-      }
-    }
-
+    // ========== 全量分析（取消增量过滤，每次都重新扫描全部消息）==========
+    // 每条新纪录入库前都会走 dedup（taskService.findIdByNormalizedTitle 等），
+    // 重复项会合并 source / 直接跳过，因此重复分析是安全的。
     const maxMessageId = messages.reduce((mx, m) => (m.id > mx ? m.id : mx), 0)
-    const mode = lastAnalyzedId !== undefined ? 'incremental' : 'full'
 
-    reportProgress(10, `${mode === 'incremental' ? '增量分析' : '全量分析'} · 共 ${messages.length} 条消息`)
+    reportProgress(10, `全量分析 · 共 ${messages.length} 条消息`)
 
     const batchSize = 30
     const overlap = 5
@@ -1746,9 +1722,9 @@ export async function startUnifiedExtraction(
       tipsExtracted: savedTips,
       nodesExtracted: savedNodes,
       edgesExtracted: savedEdges,
-      // 增量分析水位线：下次点击 AI 分析只会处理 id > lastAnalyzedMessageId 的新消息
+      // 保留最后一次扫描到的消息 ID 作为审计信息（不再用于增量跳过）
       lastAnalyzedMessageId: maxMessageId,
-      mode,
+      mode: 'full',
     })
 
     reportProgress(
