@@ -129,7 +129,8 @@ function writeLog(level: LogLevel, category: string, message: string, data?: any
 
   // 只在需要时输出到控制台（WARN/ERROR 或明确指定）
   if (toConsole || level === 'WARN' || level === 'ERROR') {
-    console.log(`[AI] ${message}`)
+    const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log
+    fn(`[${category}] ${message}`)
   }
 }
 

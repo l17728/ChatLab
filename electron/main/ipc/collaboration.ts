@@ -26,6 +26,7 @@ import {
   startUnifiedExtraction,
 } from '../services/extractionRunner'
 import { openDatabase } from '../database/core'
+import { logAnalysis } from '../ai/analysisLog'
 
 /**
  * 注册协作功能 IPC 处理器
@@ -143,13 +144,14 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
       globalNicknames: string[] = []
     ) => {
       try {
-        console.log(
-          `[AI-Analysis] IPC createExtractionJob: sessionId=${sessionId} jobType=${jobType} forceRerun=${forceRerun} nicknames=${globalNicknames.length}`
+        logAnalysis(
+          'info',
+          `IPC createExtractionJob: sessionId=${sessionId} jobType=${jobType} forceRerun=${forceRerun} nicknames=${globalNicknames.length}`
         )
         const job = await extractionJobService.createJob(sessionId, jobType, forceRerun)
-        console.log(`[AI-Analysis] Job resolved: id=${job.id} status=${job.status}`)
+        logAnalysis('info', `Job resolved: id=${job.id} status=${job.status}`)
         if (job.status === 'done') {
-          console.log(`[AI-Analysis] Job already done, skip launching worker (should not happen after fix)`)
+          logAnalysis('info', 'Job already done, skip launching worker (should not happen after fix)')
         }
         // Launch actual extraction asynchronously based on jobType
         if (job.status !== 'done') {

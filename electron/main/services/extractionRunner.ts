@@ -13,6 +13,7 @@ import { focusService } from './focusService'
 import { todoService } from './todoService'
 import { extractionJobService } from '../database/global/extraction'
 import { getActiveConfig, buildPiModel } from '../ai/llm'
+import { logAnalysis } from '../ai/analysisLog'
 import {
   completeSimple,
   stream as piStream,
@@ -1200,8 +1201,9 @@ async function extractAllWithLLM(
   }
   const config = getActiveConfig()
   if (!config) {
-    console.error(
-      '[AI-Analysis] ❌ extractAllWithLLM: 没有激活的 LLM 配置，本批次返回空结果。请在"设置 → AI 模型配置"激活一个服务商。'
+    logAnalysis(
+      'error',
+      'extractAllWithLLM: 没有激活的 LLM 配置，本批次返回空结果。请在"设置 → AI 模型配置"激活一个服务商。'
     )
     return empty
   }
@@ -1278,17 +1280,18 @@ ${todoRule}
           // 显式丢弃，不污染任何下游逻辑
           break
         case 'error':
-          console.error(
-            `[AI-Analysis] ❌ LLM stream error (provider=${config.provider} model=${config.model}):`,
-            evt.error.errorMessage || evt.reason
+          logAnalysis(
+            'error',
+            `LLM stream error (provider=${config.provider} model=${config.model}): ${evt.error.errorMessage || evt.reason}`
           )
           return empty
       }
     }
 
     const final = await eventStream.result()
-    console.log(
-      `[AI-Analysis] LLM stream finished: textTokens=${textTokens} toolTokens=${toolTokens} contentBlocks=${final.content.length}`
+    logAnalysis(
+      'info',
+      `LLM stream finished: textTokens=${textTokens} toolTokens=${toolTokens} contentBlocks=${final.content.length}`
     )
     // 找到第一个 toolCall 块，取 arguments
     const toolCall = final.content.find((c): c is Extract<typeof c, { type: 'toolCall' }> => c.type === 'toolCall')
@@ -1300,13 +1303,15 @@ ${todoRule}
         .join('')
         .trim()
       if (!fallbackText) {
-        console.error(
-          `[AI-Analysis] ❌ LLM 返回空：无 tool call 也无 text。检查 provider=${config.provider} model=${config.model} 是否支持 function-calling，apiKey 是否有效。`
+        logAnalysis(
+          'error',
+          `LLM 返回空：无 tool call 也无 text。检查 provider=${config.provider} model=${config.model} 是否支持 function-calling，apiKey 是否有效。`
         )
         return empty
       }
-      console.warn(
-        `[AI-Analysis] ⚠️  LLM 未调用工具（provider=${config.provider}），回退到 raw text JSON 解析。文本长度=${fallbackText.length}`
+      logAnalysis(
+        'warn',
+        `LLM 未调用工具（provider=${config.provider}），回退到 raw text JSON 解析。文本长度=${fallbackText.length}`
       )
       return parseRawJsonFallback(fallbackText, empty)
     }
@@ -1316,12 +1321,14 @@ ${todoRule}
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
     if (controller.signal.aborted) {
-      console.error(
-        `[AI-Analysis] ❌ LLM 调用超时（>120s，provider=${config.provider} model=${config.model}），本批次放弃`
+      logAnalysis(
+        'error',
+        `LLM 调用超时（>120s，provider=${config.provider} model=${config.model}），本批次放弃`
       )
     } else {
-      console.error(
-        `[AI-Analysis] ❌ LLM 调用异常（provider=${config.provider} model=${config.model} baseUrl=${config.baseUrl || '(默认)'}）: ${errMsg}`
+      logAnalysis(
+        'error',
+        `LLM 调用异常（provider=${config.provider} model=${config.model} baseUrl=${config.baseUrl || '(默认)'}）: ${errMsg}`
       )
     }
     return empty
@@ -1416,23 +1423,26 @@ export async function startUnifiedExtraction(
   forceRerun: boolean = false,
   globalNicknames: string[] = []
 ): Promise<void> {
-  console.log(
-    `[AI-Analysis] startUnifiedExtraction ENTRY: sessionId=${sessionId} forceRerun=${forceRerun} nicknames=[${globalNicknames.join(', ')}]`
+  logAnalysis(
+    'info',
+    `startUnifiedExtraction ENTRY: sessionId=${sessionId} forceRerun=${forceRerun} nicknames=[${globalNicknames.join(', ')}]`
   )
 
   // 预检 LLM 配置——新环境最常见的失败点：根本没有激活的 LLM
   const preflightConfig = getActiveConfig()
   if (!preflightConfig) {
-    console.error(
-      '[AI-Analysis] ❌ ABORTED: 没有激活的 LLM 配置。请在"设置 → AI 模型配置"里新增并激活一个服务商。'
+    logAnalysis(
+      'error',
+      'ABORTED: 没有激活的 LLM 配置。请在"设置 → AI 模型配置"里新增并激活一个服务商。'
     )
     return
   }
   const apiKeyMasked = preflightConfig.apiKey
     ? `${preflightConfig.apiKey.slice(0, 4)}...(len=${preflightConfig.apiKey.length})`
     : '(空)'
-  console.log(
-    `[AI-Analysis] LLM config OK: provider=${preflightConfig.provider} model=${preflightConfig.model || '(默认)'} baseUrl=${preflightConfig.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
+  logAnalysis(
+    'info',
+    `LLM config OK: provider=${preflightConfig.provider} model=${preflightConfig.model || '(默认)'} baseUrl=${preflightConfig.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
   )
 
   const job = await extractionJobService.createJob(sessionId, 'all', forceRerun)
@@ -1440,13 +1450,14 @@ export async function startUnifiedExtraction(
   // 不再因"已完成"而短路——允许反复重跑，由下游保存阶段的 dedup 兜底。
   // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
   if (job.status === 'running') {
-    console.log(
-      `[AI-Analysis] Session ${sessionId} already has a running extraction (jobId=${job.id}), skipping duplicate launch`
+    logAnalysis(
+      'info',
+      `Session ${sessionId} already has a running extraction (jobId=${job.id}), skipping duplicate launch`
     )
     return
   }
 
-  console.log(`[AI-Analysis] Starting job ${job.id} (status=${job.status})`)
+  logAnalysis('info', `Starting job ${job.id} (status=${job.status})`)
   extractionJobService.startJob(job.id)
 
   // 单调棘轮：由于批次滑窗重叠（batchSize=30, overlap=5）+ token 流式回调与批次完成
@@ -1465,11 +1476,12 @@ export async function startUnifiedExtraction(
 
   try {
     const { messages: rawMessages, total } = await getAllRecentMessages(sessionId, undefined, 999999)
-    console.log(`[AI-Analysis] Loaded messages: total=${total} for session=${sessionId}`)
+    logAnalysis('info', `Loaded messages: total=${total} for session=${sessionId}`)
 
     if (total === 0) {
-      console.warn(
-        `[AI-Analysis] ⚠️  Session ${sessionId} has 0 messages. 检查：1) 导入是否真正完成 2) sessions.db 是否写入了 messages 表 3) sessionId 是否正确`
+      logAnalysis(
+        'warn',
+        `Session ${sessionId} has 0 messages. 检查：1) 导入是否真正完成 2) sessions.db 是否写入了 messages 表 3) sessionId 是否正确`
       )
       extractionJobService.finishJob(job.id, {})
       reportProgress(100, '无消息可分析')
@@ -1551,12 +1563,14 @@ export async function startUnifiedExtraction(
         res.tips.length +
         res.graph.entities.length +
         res.graph.relationships.length
-      console.log(
-        `[AI-Analysis] Batch ${batchLabel} done: tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | batch total=${batchTotal}`
+      logAnalysis(
+        'info',
+        `Batch ${batchLabel} done: tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | batch total=${batchTotal}`
       )
       if (batchTotal === 0) {
-        console.warn(
-          `[AI-Analysis] ⚠️  Batch ${batchLabel} returned 0 items. 可能原因：LLM 未返回 tool call / API 错误 / 消息内容无可提取信息`
+        logAnalysis(
+          'warn',
+          `Batch ${batchLabel} returned 0 items. 可能原因：LLM 未返回 tool call / API 错误 / 消息内容无可提取信息`
         )
       }
 
@@ -1814,20 +1828,22 @@ export async function startUnifiedExtraction(
     const totalSaved =
       savedTasks + savedTodos + savedFocus + savedFaqs + savedConcepts + savedDocuments + savedProcedures + savedTips + savedNodes + savedEdges
     const totalMerged = mergedTasks + skippedTodos + skippedFocus
-    console.log(
-      `[AI-Analysis] ✅ Extraction DONE for session=${sessionId} jobId=${job.id}\n` +
+    logAnalysis(
+      'info',
+      `✅ Extraction DONE for session=${sessionId} jobId=${job.id}\n` +
         `  └─ new: tasks=${savedTasks} todos=${savedTodos} focus=${savedFocus} faqs=${savedFaqs} concepts=${savedConcepts} docs=${savedDocuments} procs=${savedProcedures} tips=${savedTips} nodes=${savedNodes} edges=${savedEdges}\n` +
         `  └─ dedup skipped: tasks=${mergedTasks} (merged source) todos=${skippedTodos} focus=${skippedFocus}\n` +
         `  └─ total saved=${totalSaved}, total merged/skipped=${totalMerged}`
     )
     if (totalSaved === 0) {
-      console.warn(
-        `[AI-Analysis] ⚠️  本次分析最终入库条数为 0。若 dedup skipped 也为 0，说明 LLM 每批都返回空；若 dedup skipped > 0，说明内容已全部入库过（重跑正常）。`
+      logAnalysis(
+        'warn',
+        '本次分析最终入库条数为 0。若 dedup skipped 也为 0，说明 LLM 每批都返回空；若 dedup skipped > 0，说明内容已全部入库过（重跑正常）。'
       )
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
-    console.error(`[AI-Analysis] ❌ Extraction FAILED for session=${sessionId} jobId=${job.id}: ${errMsg}`)
+    logAnalysis('error', `Extraction FAILED for session=${sessionId} jobId=${job.id}: ${errMsg}`)
     extractionJobService.failJob(job.id, 'UNIFIED_EXTRACTION_ERROR', errMsg)
     win.webContents.send('collab:extractionError', {
       jobId: job.id,
