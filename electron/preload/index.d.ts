@@ -490,6 +490,11 @@ interface LlmApi {
     model?: string
   ) => Promise<{ success: boolean; error?: string }>
   hasConfig: () => Promise<boolean>
+  testConnection: () => Promise<{
+    success: boolean
+    error?: string
+    details?: Record<string, unknown>
+  }>
 
   // 聊天功能
   chat: (

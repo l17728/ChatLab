@@ -160,6 +160,17 @@ const virtualizer = useVirtualizer(
 // 虚拟化后的项目
 const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 
+// 虚拟项与 flatList 配对——避免模板里对 flatList[virtualItem.index] 做 `as {...}` 断言，
+// vue-tsc 解析器对模板里的对象类型断言有问题；这里 row.item 是 discriminated union，
+// 模板可以通过 v-if="row.item?.type === 'xxx'" 自动收窄。
+type VirtualRow = { virtualItem: ReturnType<typeof virtualizer.value.getVirtualItems>[number]; item: FlatListItem | undefined }
+const virtualRows = computed<VirtualRow[]>(() =>
+  virtualItems.value.map((virtualItem) => ({
+    virtualItem,
+    item: flatList.value[virtualItem.index],
+  })),
+)
+
 // 总高度
 const totalSize = computed(() => virtualizer.value.getTotalSize())
 
@@ -331,73 +342,67 @@ watch(
     <div v-else ref="scrollContainerRef" class="flex-1 overflow-y-auto py-1">
       <div class="relative w-full" :style="{ height: `${totalSize}px` }">
         <div
-          v-for="virtualItem in virtualItems"
-          :key="String(virtualItem.key)"
+          v-for="row in virtualRows"
+          :key="String(row.virtualItem.key)"
           :ref="(el) => measureElement(el as Element)"
           class="absolute left-0 top-0 w-full"
-          :style="{ transform: `translateY(${virtualItem.start}px)` }"
+          :style="{ transform: `translateY(${row.virtualItem.start}px)` }"
         >
           <!-- 日期头 -->
-          <template v-if="flatList[virtualItem.index]?.type === 'date'">
+          <template v-if="row.item?.type === 'date'">
             <div class="flex w-full items-center gap-1 px-2 py-1">
               <span class="text-xs font-medium text-gray-700 dark:text-gray-200">
-                {{ (flatList[virtualItem.index] as { label: string }).label }}
+                {{ row.item.label }}
               </span>
-              <span class="text-xs text-gray-400">
-                ({{ (flatList[virtualItem.index] as { count: number }).count }})
-              </span>
+              <span class="text-xs text-gray-400">({{ row.item.count }})</span>
             </div>
           </template>
 
           <!-- 会话项 -->
-          <template v-else-if="flatList[virtualItem.index]?.type === 'session'">
+          <template v-else-if="row.item?.type === 'session'">
             <button
               class="flex w-full flex-col rounded px-2 py-1 pl-4 text-left transition-colors"
               :class="[
-                activeSessionId === (flatList[virtualItem.index] as { session: ChatSessionItem }).session.id
+                activeSessionId === row.item.session.id
                   ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
                   : 'hover:bg-gray-100 dark:hover:bg-gray-700',
               ]"
-              @click="handleSelectSession((flatList[virtualItem.index] as { session: ChatSessionItem }).session)"
+              @click="handleSelectSession(row.item.session)"
             >
               <!-- 时间和消息数 -->
               <div class="flex w-full items-center justify-between">
                 <span class="text-xs text-gray-600 dark:text-gray-300">
-                  {{ formatTime((flatList[virtualItem.index] as { session: ChatSessionItem }).session.startTs) }}
+                  {{ formatTime(row.item.session.startTs) }}
                 </span>
-                <span class="text-xs text-gray-400">
-                  ({{ (flatList[virtualItem.index] as { session: ChatSessionItem }).session.messageCount }})
-                </span>
+                <span class="text-xs text-gray-400">({{ row.item.session.messageCount }})</span>
               </div>
 
               <!-- 摘要或生成按钮 -->
               <div class="mt-0.5 flex w-full items-center">
                 <!-- 有摘要：显示摘要（两行） -->
                 <UTooltip
-                  v-if="(flatList[virtualItem.index] as { session: ChatSessionItem }).session.summary"
+                  v-if="row.item.session.summary"
                   :popper="{ placement: 'right' }"
                   :ui="{ content: 'z-[10001] h-auto max-h-80 overflow-y-auto' }"
                 >
                   <span class="line-clamp-2 text-xs leading-tight text-gray-400 dark:text-gray-500">
-                    {{ (flatList[virtualItem.index] as { session: ChatSessionItem }).session.summary }}
+                    {{ row.item.session.summary }}
                   </span>
                   <template #content>
                     <div class="max-w-sm whitespace-pre-wrap text-sm leading-relaxed">
-                      {{ (flatList[virtualItem.index] as { session: ChatSessionItem }).session.summary }}
+                      {{ row.item.session.summary }}
                     </div>
                   </template>
                 </UTooltip>
 
                 <!-- 无摘要且消息数>=3：显示生成按钮 -->
                 <span
-                  v-else-if="(flatList[virtualItem.index] as { session: ChatSessionItem }).session.messageCount >= 3"
+                  v-else-if="row.item.session.messageCount >= 3"
                   class="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400"
-                  @click="
-                    generateSummary((flatList[virtualItem.index] as { session: ChatSessionItem }).session, $event)
-                  "
+                  @click="generateSummary(row.item.session, $event)"
                 >
                   <UIcon
-                    v-if="isGenerating((flatList[virtualItem.index] as { session: ChatSessionItem }).session.id)"
+                    v-if="isGenerating(row.item.session.id)"
                     name="i-heroicons-arrow-path"
                     class="h-3 w-3 animate-spin"
                   />

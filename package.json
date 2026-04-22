@@ -1,6 +1,6 @@
 {
   "name": "ChatLab",
-  "version": "0.14.0",
+  "version": "0.17.3",
   "description": "本地化的聊天记录分析工具，通过 SQL 和 AI Agent 回顾你的社交记忆",
   "repository": {
     "type": "git",
@@ -87,6 +87,7 @@
     "tailwindcss": "^4.0.0",
     "vite": "^6.3.5",
     "vue": "^3.5.25",
-    "vue-router": "^4.6.3"
+    "vue-router": "^4.6.3",
+    "vue-tsc": "^2.2.12"
   }
 }

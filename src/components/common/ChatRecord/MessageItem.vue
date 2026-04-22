@@ -22,7 +22,7 @@ const props = defineProps<{
   isFiltered?: boolean
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'view-context', messageId: number): void
 }>()
 
