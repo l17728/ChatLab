@@ -7,7 +7,6 @@ import Database from 'better-sqlite3'
 import * as fs from 'fs'
 import {
   openDatabase,
-  closeDatabase,
   getDbPath,
   buildTimeFilter,
   buildSystemMessageFilter,
@@ -457,68 +456,43 @@ function ensureAliasesColumn(sessionId: string): void {
   // 每个会话只检查一次
   if (aliasesCheckedSessions.has(sessionId)) return
 
-  const dbPath = getDbPath(sessionId)
-  if (!fs.existsSync(dbPath)) return
+  const db = openDatabase(sessionId)
+  if (!db) return
 
-  // 先关闭可能缓存的只读连接
-  closeDatabase(sessionId)
+  const columns = db.prepare('PRAGMA table_info(member)').all() as Array<{ name: string }>
+  const hasAliases = columns.some((col) => col.name === 'aliases')
 
-  // 使用写入模式打开数据库检查并添加字段
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-
-  try {
-    // 检查 aliases 字段是否存在
-    const columns = db.prepare('PRAGMA table_info(member)').all() as Array<{ name: string }>
-    const hasAliases = columns.some((col) => col.name === 'aliases')
-
-    if (!hasAliases) {
-      // 添加 aliases 字段
-      db.exec("ALTER TABLE member ADD COLUMN aliases TEXT DEFAULT '[]'")
-      console.log(`[Worker] Added aliases column to member table in session ${sessionId}`)
-    }
-
-    // 标记为已检查
-    aliasesCheckedSessions.add(sessionId)
-  } finally {
-    db.close()
+  if (!hasAliases) {
+    db.exec("ALTER TABLE member ADD COLUMN aliases TEXT DEFAULT '[]'")
+    console.log(`[Worker] Added aliases column to member table in session ${sessionId}`)
   }
+
+  aliasesCheckedSessions.add(sessionId)
 }
 
 /**
  * 确保 member 表有 avatar 字段（数据库迁移）
  * 用于兼容旧数据库
+ *
+ * 优化：复用已缓存的 DB 连接（WAL 模式支持读写），避免 close+reopen 开销
  */
 export function ensureAvatarColumn(sessionId: string): void {
   // 每个会话只检查一次
   if (avatarCheckedSessions.has(sessionId)) return
 
-  const dbPath = getDbPath(sessionId)
-  if (!fs.existsSync(dbPath)) return
+  const db = openDatabase(sessionId)
+  if (!db) return
 
-  // 先关闭可能缓存的只读连接
-  closeDatabase(sessionId)
+  // 检查 avatar 字段是否存在
+  const columns = db.prepare('PRAGMA table_info(member)').all() as Array<{ name: string }>
+  const hasAvatar = columns.some((col) => col.name === 'avatar')
 
-  // 使用写入模式打开数据库检查并添加字段
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-
-  try {
-    // 检查 avatar 字段是否存在
-    const columns = db.prepare('PRAGMA table_info(member)').all() as Array<{ name: string }>
-    const hasAvatar = columns.some((col) => col.name === 'avatar')
-
-    if (!hasAvatar) {
-      // 添加 avatar 字段
-      db.exec('ALTER TABLE member ADD COLUMN avatar TEXT')
-      console.log(`[Worker] Added avatar column to member table in session ${sessionId}`)
-    }
-
-    // 标记为已检查
-    avatarCheckedSessions.add(sessionId)
-  } finally {
-    db.close()
+  if (!hasAvatar) {
+    db.exec('ALTER TABLE member ADD COLUMN avatar TEXT')
+    console.log(`[Worker] Added avatar column to member table in session ${sessionId}`)
   }
+
+  avatarCheckedSessions.add(sessionId)
 }
 
 /**
