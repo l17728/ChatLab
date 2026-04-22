@@ -26,7 +26,9 @@
     "errorLLMNotConfigured": "AI 分析启动失败：尚未配置 LLM",
     "errorLLMNotConfiguredDesc": "请在 设置 → AI 模型配置 里新增并激活一个可用的 LLM 服务商，再重新分析。",
     "errorLLMConfigInvalid": "AI 分析启动失败：LLM 配置无效",
-    "errorLLMUnreachable": "AI 分析启动失败：LLM 无法访问"
+    "errorLLMUnreachable": "AI 分析启动失败：LLM 无法访问",
+    "errorNoMessages": "AI 分析中止：该会话没有可分析的消息",
+    "errorNoMessagesDesc": "请检查消息导入是否真正完成，或尝试重新导入该会话。"
   },
   "reset": "重置",
   "error": {

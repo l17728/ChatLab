@@ -14,6 +14,7 @@ import { todoService } from './todoService'
 import { extractionJobService } from '../database/global/extraction'
 import { getActiveConfig, buildPiModel } from '../ai/llm'
 import { testLLMConnection } from '../ai/llm/preflight'
+import { phaseToReason } from '../ai/llm/preflightReason'
 import { logAnalysis } from '../ai/analysisLog'
 import {
   completeSimple,
@@ -258,7 +259,8 @@ function formatMessagesForLLM(messages: ChatMessage[]): string {
 async function extractTasksWithLLM(messages: ChatMessage[]): Promise<ExtractedTask[]> {
   const config = getActiveConfig()
   if (!config) {
-    console.warn('[ExtractionRunner] No active LLM config, skipping extraction')
+    // preflightAndStart 应已在入口拦住；这里是兜底，保持日志一致
+    logAnalysis('error', 'extractTasksWithLLM: 没有激活的 LLM 配置，返回空结果')
     return []
   }
 
@@ -334,7 +336,7 @@ function deduplicateTasks(tasks: ExtractedTask[]): ExtractedTask[] {
 async function extractGraphDataWithLLM(messages: ChatMessage[]): Promise<ExtractedGraphData> {
   const config = getActiveConfig()
   if (!config) {
-    console.warn('[ExtractionRunner] No active LLM config, skipping graph extraction')
+    logAnalysis('error', 'extractGraphDataWithLLM: 没有激活的 LLM 配置，返回空结果')
     return { entities: [], relationships: [] }
   }
 
@@ -386,7 +388,7 @@ ${formatMessagesForLLM(messages)}
     // 容错解析：提取第一个 {...} 块
     const match = text.match(/\{[\s\S]*\}/)
     if (!match) {
-      console.warn('[ExtractionRunner] Graph LLM returned no JSON object')
+      logAnalysis('warn', 'Graph LLM 未返回 JSON 对象，本批次跳过（可能是 LLM 不支持 function-calling）')
       return { entities: [], relationships: [] }
     }
 
@@ -529,29 +531,124 @@ async function saveGraphData(
   return { savedNodes, savedEdges }
 }
 
+// ==================== 提取启动共享 helpers ====================
+
+type ExtractionJobType = 'all' | 'tasks' | 'graph' | 'faq' | 'focus'
+type ExtractionErrorReason =
+  | 'LLM_NOT_CONFIGURED'
+  | 'LLM_CONFIG_INVALID'
+  | 'LLM_UNREACHABLE'
+  | 'NO_MESSAGES'
+  | 'UNIFIED_EXTRACTION_ERROR'
+  | 'TASK_EXTRACTION_ERROR'
+  | 'GRAPH_EXTRACTION_ERROR'
+  | 'FAQ_EXTRACTION_ERROR'
+  | 'FOCUS_EXTRACTION_ERROR'
+
+/**
+ * 开始一个提取任务的前置准备：
+ *   1) 若 job 已在 running，视为重复启动，静默跳过
+ *   2) startJob 置 running
+ *   3) 跑 LLM 预检（8s 超时），失败 → failJob + send collab:extractionError，返回 false
+ *   4) 成功返回 true，调用方继续业务
+ *
+ * 所有 start*Extraction 共用这段逻辑，避免每个函数重复写四份相同代码。
+ */
+async function preflightAndStart(
+  job: { id: string; status: string },
+  win: BrowserWindow,
+  sessionId: string,
+  jobType: ExtractionJobType
+): Promise<boolean> {
+  if (job.status === 'running') {
+    logAnalysis(
+      'info',
+      `Session ${sessionId} already has a running ${jobType} extraction (jobId=${job.id}), skipping duplicate launch`
+    )
+    return false
+  }
+
+  logAnalysis('info', `Starting ${jobType} job ${job.id} (status=${job.status})`)
+  extractionJobService.startJob(job.id)
+
+  const activeConfig = getActiveConfig()
+  const apiKeyMasked = activeConfig?.apiKey
+    ? `${activeConfig.apiKey.slice(0, 4)}...(len=${activeConfig.apiKey.length})`
+    : '(空)'
+  logAnalysis(
+    'info',
+    `LLM preflight start [${jobType}]: provider=${activeConfig?.provider ?? '(无配置)'} model=${activeConfig?.model || '(默认)'} baseUrl=${activeConfig?.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
+  )
+  const preflight = await testLLMConnection({ timeoutMs: 8000 })
+  if (!preflight.success) {
+    const reason: ExtractionErrorReason = phaseToReason(preflight.details.phase)
+    logAnalysis(
+      'error',
+      `LLM 预检失败 [${jobType}]（phase=${preflight.details.phase}, reason=${reason}）: ${preflight.error}`,
+      preflight.details
+    )
+    extractionJobService.failJob(job.id, reason, preflight.error || 'LLM preflight failed')
+    win.webContents.send('collab:extractionError', {
+      jobId: job.id,
+      sessionId,
+      jobType,
+      reason,
+      error: preflight.error,
+      details: preflight.details,
+    })
+    return false
+  }
+  logAnalysis(
+    'info',
+    `✅ LLM preflight OK [${jobType}]: provider=${preflight.details.provider} model=${preflight.details.model} llmElapsed=${preflight.details.llmElapsed}ms`
+  )
+  return true
+}
+
+/**
+ * "无消息可分析"的统一处理。以前是 finishJob({}) 静默成功，
+ * 前端看不到任何异常。现在改为 failJob(NO_MESSAGES) + 发错误事件，
+ * 让用户知道"导入是不是失败了 / sessionId 是不是错了"。
+ */
+function abortExtractionNoMessages(
+  job: { id: string },
+  win: BrowserWindow,
+  sessionId: string,
+  jobType: ExtractionJobType
+): void {
+  const reason: ExtractionErrorReason = 'NO_MESSAGES'
+  const error = '会话暂无消息可分析，请检查导入是否完成'
+  logAnalysis(
+    'warn',
+    `Session ${sessionId} has 0 messages for ${jobType} extraction. 检查：1) 导入是否真正完成 2) sessions DB 是否写入 3) sessionId 是否正确`
+  )
+  extractionJobService.failJob(job.id, reason, error)
+  win.webContents.send('collab:extractionError', {
+    jobId: job.id,
+    sessionId,
+    jobType,
+    reason,
+    error,
+  })
+}
+
 /**
  * 启动知识图谱提取（异步，不阻塞）
  * 导入完成后调用此函数（与任务提取并行）
  */
 export async function startGraphExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
-  // 1. 创建/获取提取任务（去重）
+  logAnalysis('info', `startGraphExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'graph')
+  if (!(await preflightAndStart(job, win, sessionId, 'graph'))) return
 
-  if (job.status === 'done') {
-    console.log('[ExtractionRunner] Graph extraction already done for session:', sessionId)
-    return
-  }
-
-  extractionJobService.startJob(job.id)
   sendGraphProgress(win, job.id, sessionId, 5, '开始读取消息（图谱提取）...')
 
   try {
     const { messages: rawMessages, total } = await getAllRecentMessages(sessionId, undefined, 999999)
-    console.log(`[ExtractionRunner] Graph extraction: ${total} messages for session ${sessionId}`)
+    logAnalysis('info', `Graph extraction loaded messages: total=${total} session=${sessionId}`)
 
     if (total === 0) {
-      extractionJobService.finishJob(job.id, { nodesExtracted: 0, edgesExtracted: 0 })
-      sendGraphProgress(win, job.id, sessionId, 100, '无消息可分析（图谱）')
+      abortExtractionNoMessages(job, win, sessionId, 'graph')
       return
     }
 
@@ -627,26 +724,18 @@ export async function startGraphExtraction(sessionId: string, win: BrowserWindow
  * 导入完成后调用此函数
  */
 export async function startTaskExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
-  // 1. 创建/获取提取任务（去重）
+  logAnalysis('info', `startTaskExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'tasks')
+  if (!(await preflightAndStart(job, win, sessionId, 'tasks'))) return
 
-  // 已完成则跳过
-  if (job.status === 'done') {
-    console.log('[ExtractionRunner] Task extraction already done for session:', sessionId)
-    return
-  }
-
-  // 标记为运行中
-  extractionJobService.startJob(job.id)
   sendProgress(win, job.id, sessionId, 5, '开始读取消息...')
 
   try {
-    // 2. 查询所有消息（getAllRecentMessages 内部处理数据库打开）
     const { messages: rawMessages, total } = await getAllRecentMessages(sessionId, undefined, 999999)
+    logAnalysis('info', `Task extraction loaded messages: total=${total} session=${sessionId}`)
 
     if (total === 0) {
-      extractionJobService.finishJob(job.id, { tasksExtracted: 0 })
-      sendProgress(win, job.id, sessionId, 100, '无消息可分析')
+      abortExtractionNoMessages(job, win, sessionId, 'tasks')
       return
     }
 
@@ -824,23 +913,18 @@ function deduplicateFAQs(faqs: ExtractedFAQ[]): ExtractedFAQ[] {
  * 启动 FAQ 知识提取（异步，不阻塞）
  */
 export async function startFaqExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
+  logAnalysis('info', `startFaqExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'faq')
+  if (!(await preflightAndStart(job, win, sessionId, 'faq'))) return
 
-  if (job.status === 'done') {
-    console.log('[ExtractionRunner] FAQ extraction already done for session:', sessionId)
-    return
-  }
-
-  extractionJobService.startJob(job.id)
   sendFaqProgress(win, job.id, sessionId, 5, '开始读取消息（FAQ提取）...')
 
   try {
     const { messages: rawMessages, total } = await getAllRecentMessages(sessionId, undefined, 999999)
-    console.log(`[ExtractionRunner] FAQ extraction: ${total} messages for session ${sessionId}`)
+    logAnalysis('info', `FAQ extraction loaded messages: total=${total} session=${sessionId}`)
 
     if (total === 0) {
-      extractionJobService.finishJob(job.id, { faqExtracted: 0 })
-      sendFaqProgress(win, job.id, sessionId, 100, '无消息可分析（FAQ）')
+      abortExtractionNoMessages(job, win, sessionId, 'faq')
       return
     }
 
@@ -1037,23 +1121,18 @@ function deduplicateFocusItems(items: ExtractedFocusItem[]): ExtractedFocusItem[
  * 启动关注点提取（异步，不阻塞）
  */
 export async function startFocusExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
+  logAnalysis('info', `startFocusExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'focus')
+  if (!(await preflightAndStart(job, win, sessionId, 'focus'))) return
 
-  if (job.status === 'done') {
-    console.log('[ExtractionRunner] Focus extraction already done for session:', sessionId)
-    return
-  }
-
-  extractionJobService.startJob(job.id)
   sendFocusProgress(win, job.id, sessionId, 5, '开始读取消息（关注点提取）...')
 
   try {
     const { messages: rawMessages, total } = await getAllRecentMessages(sessionId, undefined, 999999)
-    console.log(`[ExtractionRunner] Focus extraction: ${total} messages for session ${sessionId}`)
+    logAnalysis('info', `Focus extraction loaded messages: total=${total} session=${sessionId}`)
 
     if (total === 0) {
-      extractionJobService.finishJob(job.id, { focusExtracted: 0 })
-      sendFocusProgress(win, job.id, sessionId, 100, '无消息可分析（关注点）')
+      abortExtractionNoMessages(job, win, sessionId, 'focus')
       return
     }
 
@@ -1435,60 +1514,7 @@ export async function startUnifiedExtraction(
   const job = await extractionJobService.createJob(sessionId, 'all', forceRerun)
 
   // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
-  if (job.status === 'running') {
-    logAnalysis(
-      'info',
-      `Session ${sessionId} already has a running extraction (jobId=${job.id}), skipping duplicate launch`
-    )
-    return
-  }
-
-  logAnalysis('info', `Starting job ${job.id} (status=${job.status})`)
-  extractionJobService.startJob(job.id)
-
-  // ========== LLM 预检 ==========
-  // 跑一次最小化 completeSimple 请求，提前捕捉：
-  //   - 没激活配置 / API Key 为空 / model 名错
-  //   - baseUrl 不通 / apiKey 鉴权失败 / 429 配额
-  // 任何失败都 failJob 并通过 collab:extractionError 事件告诉渲染进程，
-  // reason 字段让前端按 LLM_NOT_CONFIGURED / LLM_UNREACHABLE 分支弹窗。
-  const activeConfig = getActiveConfig()
-  const apiKeyMasked = activeConfig?.apiKey
-    ? `${activeConfig.apiKey.slice(0, 4)}...(len=${activeConfig.apiKey.length})`
-    : '(空)'
-  logAnalysis(
-    'info',
-    `LLM preflight start: provider=${activeConfig?.provider ?? '(无配置)'} model=${activeConfig?.model || '(默认)'} baseUrl=${activeConfig?.baseUrl || '(默认)'} apiKey=${apiKeyMasked}`
-  )
-  // 预检用较短超时（8s），不挡分析太久；真实分析各批次仍 120s
-  const preflight = await testLLMConnection({ timeoutMs: 8000 })
-  if (!preflight.success) {
-    const reason =
-      preflight.details.phase === 'config' || preflight.details.phase === 'apikey'
-        ? 'LLM_NOT_CONFIGURED'
-        : preflight.details.phase === 'model_build'
-          ? 'LLM_CONFIG_INVALID'
-          : 'LLM_UNREACHABLE'
-    logAnalysis(
-      'error',
-      `LLM 预检失败（phase=${preflight.details.phase}, reason=${reason}）: ${preflight.error}`,
-      preflight.details
-    )
-    extractionJobService.failJob(job.id, reason, preflight.error || 'LLM preflight failed')
-    win.webContents.send('collab:extractionError', {
-      jobId: job.id,
-      sessionId,
-      jobType: 'all',
-      reason,
-      error: preflight.error,
-      details: preflight.details,
-    })
-    return
-  }
-  logAnalysis(
-    'info',
-    `✅ LLM preflight OK: provider=${preflight.details.provider} model=${preflight.details.model} llmElapsed=${preflight.details.llmElapsed}ms`
-  )
+  if (!(await preflightAndStart(job, win, sessionId, 'all'))) return
 
   // 单调棘轮：由于批次滑窗重叠（batchSize=30, overlap=5）+ token 流式回调与批次完成
   // 计算基准不同（i 与 end），进度值在相邻事件之间会短暂回退（例如 30 → 25）。
@@ -1509,12 +1535,7 @@ export async function startUnifiedExtraction(
     logAnalysis('info', `Loaded messages: total=${total} for session=${sessionId}`)
 
     if (total === 0) {
-      logAnalysis(
-        'warn',
-        `Session ${sessionId} has 0 messages. 检查：1) 导入是否真正完成 2) sessions.db 是否写入了 messages 表 3) sessionId 是否正确`
-      )
-      extractionJobService.finishJob(job.id, {})
-      reportProgress(100, '无消息可分析')
+      abortExtractionNoMessages(job, win, sessionId, 'all')
       return
     }
 
@@ -1727,20 +1748,28 @@ export async function startUnifiedExtraction(
     }
 
     // 4. FAQs（跨会话去重）
+    // 优化：先用 Set 做精确归一化匹配（覆盖 99% 重复场景），只有未精确命中
+    // 才回落到 Levenshtein 模糊比较——把原来 O(existing × new) 的两层循环
+    // 退化成 Set.has() O(1)，大规模知识库下差异巨大。
     let savedFaqs = 0
     try {
       const existingFAQs = knowledgeService.queryItems({ type: ['faq'] })
       const existingTitles = existingFAQs.map((f) => f.title.toLowerCase().trim())
+      const existingTitleSet = new Set<string>(existingTitles)
       for (const faq of dedupedFaqs) {
         try {
           const newTitle = faq.question.toLowerCase().trim()
+          if (existingTitleSet.has(newTitle)) continue
           const isDuplicate = existingTitles.some((existing) => {
             const longer = Math.max(existing.length, newTitle.length)
             if (longer === 0) return true
             const distance = levenshteinSimple(existing, newTitle)
             return 1 - distance / longer >= 0.8
           })
-          if (isDuplicate) continue
+          if (isDuplicate) {
+            existingTitleSet.add(newTitle)
+            continue
+          }
           knowledgeService.createItem({
             type: 'faq',
             title: faq.question,
@@ -1764,21 +1793,31 @@ export async function startUnifiedExtraction(
     }
 
     // 5. Concepts / Documents / Procedures / Tips —— 写入 knowledge_item 表
+    // 同 FAQ 的优化：先 Set 精确命中，再 fallback 到 Levenshtein。
     const saveKnowledgeBatch = (items: ExtractedKnowledge[], kType: 'concept' | 'document' | 'procedure' | 'tip') => {
       let count = 0
       const existing = knowledgeService.queryItems({ type: [kType] })
       const existingTitles = existing.map((f) => f.title.toLowerCase().trim())
+      const existingTitleSet = new Set<string>(existingTitles)
       const seenInThisBatch = new Set<string>()
       for (const k of items) {
         try {
           const norm = k.title.toLowerCase().trim()
           if (seenInThisBatch.has(norm)) continue
+          if (existingTitleSet.has(norm)) {
+            seenInThisBatch.add(norm)
+            continue
+          }
           const isDup = existingTitles.some((e) => {
             const longer = Math.max(e.length, norm.length)
             if (longer === 0) return true
             return 1 - levenshteinSimple(e, norm) / longer >= 0.85
           })
-          if (isDup) continue
+          if (isDup) {
+            existingTitleSet.add(norm)
+            seenInThisBatch.add(norm)
+            continue
+          }
           knowledgeService.createItem({
             type: kType,
             title: k.title,

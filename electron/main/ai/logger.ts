@@ -155,13 +155,15 @@ export const aiLogger = {
   },
 
   /**
-   * 关闭日志流
+   * 关闭日志流。必须对称清理 LOG_FILE 缓存，否则下次 getLogStream() 会因
+   * LOG_FILE 仍有值而跳过重新创建，同时 logStream 已 null，进入死路径。
    */
   close() {
     if (logStream) {
       logStream.end()
       logStream = null
     }
+    LOG_FILE = null
   },
 
   /**

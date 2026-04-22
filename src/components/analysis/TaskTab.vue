@@ -160,6 +160,10 @@ function setupExtractionListeners() {
       // rawError 已经是 formatAIError 处理过的友好文案
       description = rawError || ''
       color = 'warning'
+    } else if (reason === 'NO_MESSAGES') {
+      title = t('analysis.errorNoMessages')
+      description = t('analysis.errorNoMessagesDesc')
+      color = 'warning'
     }
 
     toast.add({

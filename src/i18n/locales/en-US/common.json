@@ -26,7 +26,9 @@
     "errorLLMNotConfigured": "AI analysis failed to start: LLM not configured",
     "errorLLMNotConfiguredDesc": "Please add and activate a working LLM provider in Settings → AI Model Configuration, then try again.",
     "errorLLMConfigInvalid": "AI analysis failed to start: LLM configuration invalid",
-    "errorLLMUnreachable": "AI analysis failed to start: LLM unreachable"
+    "errorLLMUnreachable": "AI analysis failed to start: LLM unreachable",
+    "errorNoMessages": "AI analysis aborted: this session has no messages to analyze",
+    "errorNoMessagesDesc": "Please verify that the message import finished successfully, or try re-importing this session."
   },
   "reset": "Reset",
   "error": {

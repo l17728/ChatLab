@@ -150,11 +150,9 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
         )
         const job = await extractionJobService.createJob(sessionId, jobType, forceRerun)
         logAnalysis('info', `Job resolved: id=${job.id} status=${job.status}`)
-        if (job.status === 'done') {
-          logAnalysis('info', 'Job already done, skip launching worker (should not happen after fix)')
-        }
-        // Launch actual extraction asynchronously based on jobType
-        if (job.status !== 'done') {
+        // createJob 现在永远返回 pending（新 job）或 running（互斥的活跃任务）——
+        // 没有已 done 直接回显的路径了。worker 自己内部还会再查 running 做二次互斥。
+        {
           if (jobType === 'tasks') {
             startTaskExtraction(sessionId, win).catch((err) =>
               console.error('[Collaboration] startTaskExtraction error:', err)

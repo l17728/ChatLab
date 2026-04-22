@@ -41,8 +41,12 @@ export interface ExtractionJob {
 export class ExtractionJobService {
   private db: Database.Database
 
-  constructor() {
-    this.db = getGlobalDb('collaboration')
+  /**
+   * 默认构造：从全局 DB 池拿 collaboration.db。
+   * 测试可传入 in-memory DB（better-sqlite3 ':memory:'），绕过 Electron 运行时依赖。
+   */
+  constructor(dbOverride?: Database.Database) {
+    this.db = dbOverride ?? getGlobalDb('collaboration')
   }
 
   /**

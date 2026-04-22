@@ -26,7 +26,9 @@
     "errorLLMNotConfigured": "AI 分析の起動に失敗：LLM が未設定です",
     "errorLLMNotConfiguredDesc": "設定 → AI モデル設定 から LLM プロバイダを追加・有効化してから再実行してください。",
     "errorLLMConfigInvalid": "AI 分析の起動に失敗：LLM 設定が無効です",
-    "errorLLMUnreachable": "AI 分析の起動に失敗：LLM に接続できません"
+    "errorLLMUnreachable": "AI 分析の起動に失敗：LLM に接続できません",
+    "errorNoMessages": "AI 分析を中止：このセッションには分析可能なメッセージがありません",
+    "errorNoMessagesDesc": "メッセージのインポートが正常に完了しているか確認するか、このセッションを再インポートしてください。"
   },
   "reset": "リセット",
   "error": {
