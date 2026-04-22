@@ -15,6 +15,7 @@ import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useLLMStore } from '@/stores/llm'
 import { initializeWebUI, isBrowserEnvironment } from '@/composables/useEnvironment'
+import { useExtractionErrorToast } from '@/composables/useExtractionErrorToast'
 
 const { t } = useI18n()
 
@@ -31,6 +32,11 @@ const showFirstLaunchIdentity = ref(false)
 const tooltip = {
   delayDuration: 100,
 }
+
+// AI 分析错误全局 toast：任何 Tab / Page 触发的分析失败都会弹提示。
+// 内部会按 data.reason 分发（LLM_NOT_CONFIGURED / LLM_CONFIG_INVALID /
+// LLM_UNREACHABLE / NO_MESSAGES），前两者附"跳转设置"按钮。
+useExtractionErrorToast()
 
 // 浏览器环境 = Web UI 模式，不需要等待 Electron IPC 初始化
 const isWebUI = isBrowserEnvironment()

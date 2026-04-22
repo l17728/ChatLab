@@ -281,6 +281,12 @@ function initializeCollaborationDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_knowledge_type ON knowledge_item(type);
     CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge_item(category);
     CREATE INDEX IF NOT EXISTS idx_knowledge_status ON knowledge_item(status);
+    -- FAQ/Knowledge dedup 查询 LOWER(TRIM(title))——extractionRunner 在每批次
+    -- 保存前都会先 queryItems({ type: [...] }) 拉全表的归一化标题做 Set/Levenshtein
+    -- 比较。给 (type, LOWER(TRIM(title))) 建联合表达式索引，让 queryItems 的
+    -- WHERE type = ? 走索引的同时保留 title 排序能力。
+    CREATE INDEX IF NOT EXISTS idx_knowledge_type_norm_title
+      ON knowledge_item(type, LOWER(TRIM(title)));
 
     -- 知识条目来源关联表（替代 source_session_ids JSON 字段）
     CREATE TABLE IF NOT EXISTS knowledge_source (
