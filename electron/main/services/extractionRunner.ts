@@ -558,7 +558,8 @@ async function preflightAndStart(
   job: { id: string; status: string },
   win: BrowserWindow,
   sessionId: string,
-  jobType: ExtractionJobType
+  jobType: ExtractionJobType,
+  onPreflightStart?: () => void
 ): Promise<boolean> {
   if (job.status === 'running') {
     logAnalysis(
@@ -570,6 +571,9 @@ async function preflightAndStart(
 
   logAnalysis('info', `Starting ${jobType} job ${job.id} (status=${job.status})`)
   extractionJobService.startJob(job.id)
+
+  // 预检可能阻塞至多 8s。先给前端一个"正在检测"进度事件，避免进度条卡 0%。
+  onPreflightStart?.()
 
   const activeConfig = getActiveConfig()
   const apiKeyMasked = activeConfig?.apiKey
@@ -639,7 +643,12 @@ function abortExtractionNoMessages(
 export async function startGraphExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
   logAnalysis('info', `startGraphExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'graph')
-  if (!(await preflightAndStart(job, win, sessionId, 'graph'))) return
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'graph', () =>
+      sendGraphProgress(win, job.id, sessionId, 2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
 
   sendGraphProgress(win, job.id, sessionId, 5, '开始读取消息（图谱提取）...')
 
@@ -726,7 +735,12 @@ export async function startGraphExtraction(sessionId: string, win: BrowserWindow
 export async function startTaskExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
   logAnalysis('info', `startTaskExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'tasks')
-  if (!(await preflightAndStart(job, win, sessionId, 'tasks'))) return
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'tasks', () =>
+      sendProgress(win, job.id, sessionId, 2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
 
   sendProgress(win, job.id, sessionId, 5, '开始读取消息...')
 
@@ -915,7 +929,12 @@ function deduplicateFAQs(faqs: ExtractedFAQ[]): ExtractedFAQ[] {
 export async function startFaqExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
   logAnalysis('info', `startFaqExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'faq')
-  if (!(await preflightAndStart(job, win, sessionId, 'faq'))) return
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'faq', () =>
+      sendFaqProgress(win, job.id, sessionId, 2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
 
   sendFaqProgress(win, job.id, sessionId, 5, '开始读取消息（FAQ提取）...')
 
@@ -1123,7 +1142,12 @@ function deduplicateFocusItems(items: ExtractedFocusItem[]): ExtractedFocusItem[
 export async function startFocusExtraction(sessionId: string, win: BrowserWindow): Promise<void> {
   logAnalysis('info', `startFocusExtraction ENTRY: sessionId=${sessionId}`)
   const job = await extractionJobService.createJob(sessionId, 'focus')
-  if (!(await preflightAndStart(job, win, sessionId, 'focus'))) return
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'focus', () =>
+      sendFocusProgress(win, job.id, sessionId, 2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
 
   sendFocusProgress(win, job.id, sessionId, 5, '开始读取消息（关注点提取）...')
 
@@ -1513,9 +1537,6 @@ export async function startUnifiedExtraction(
   // 否则前端进度条会永远卡在"pending"。
   const job = await extractionJobService.createJob(sessionId, 'all', forceRerun)
 
-  // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
-  if (!(await preflightAndStart(job, win, sessionId, 'all'))) return
-
   // 单调棘轮：由于批次滑窗重叠（batchSize=30, overlap=5）+ token 流式回调与批次完成
   // 计算基准不同（i 与 end），进度值在相邻事件之间会短暂回退（例如 30 → 25）。
   // 这里统一用一个 ratchet 包装 sendUnifiedProgress，确保上报值只增不减。
@@ -1528,6 +1549,14 @@ export async function startUnifiedExtraction(
     sendUnifiedProgress(win, job.id, sessionId, highestProgress, message)
   }
 
+  // 若已有活跃任务（pending/running），createJob 会返回同一个 job；避免重复 start。
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'all', () =>
+      reportProgress(2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
+
   reportProgress(5, '开始读取消息（统一提取）...')
 
   try {
@@ -1539,19 +1568,54 @@ export async function startUnifiedExtraction(
       return
     }
 
-    const messages: ChatMessage[] = rawMessages.map((m: any) => ({
+    const allMessages: ChatMessage[] = rawMessages.map((m: any) => ({
       id: m.id,
       senderName: m.senderName || m.sender_name || '未知',
       content: m.content || '',
       timestamp: m.timestamp || m.ts || 0,
     }))
 
-    // ========== 全量分析（取消增量过滤，每次都重新扫描全部消息）==========
-    // 每条新纪录入库前都会走 dedup（taskService.findIdByNormalizedTitle 等），
-    // 重复项会合并 source / 直接跳过，因此重复分析是安全的。
-    const maxMessageId = messages.reduce((mx, m) => (m.id > mx ? m.id : mx), 0)
+    // ========== 增量分析（forceRerun=true 时退化为全量） ==========
+    // 默认行为：只处理 id > lastAnalyzedMessageId 的新消息，避免重复花 LLM API 费用。
+    // 重跑已完成消息的需求走 forceRerun=true（前端可加"完整重新分析"按钮）。
+    // 首次分析（无 done 记录）和 forceRerun 都会跑全量，由保存阶段的 dedup 兜底。
+    const lastDone = extractionJobService.getLatestDoneJob(sessionId, 'all')
+    const lastAnalyzedId = !forceRerun
+      ? (lastDone?.resultSummary?.lastAnalyzedMessageId as number | undefined)
+      : undefined
+    let messages = allMessages
+    let mode: 'full' | 'incremental' = 'full'
+    if (lastAnalyzedId !== undefined && lastAnalyzedId > 0) {
+      const before = allMessages.length
+      messages = allMessages.filter((m) => m.id > lastAnalyzedId)
+      mode = 'incremental'
+      logAnalysis(
+        'info',
+        `Incremental mode: ${before} → ${messages.length} new messages (lastAnalyzedId=${lastAnalyzedId})`
+      )
+      if (messages.length === 0) {
+        const maxId = allMessages.reduce((mx, m) => (m.id > mx ? m.id : mx), 0)
+        logAnalysis('info', `No new messages since last analysis; completing with empty delta`)
+        extractionJobService.finishJob(job.id, {
+          lastAnalyzedMessageId: maxId,
+          mode: 'incremental-noop',
+        })
+        reportProgress(100, '无新消息，已是最新')
+        win.webContents.send('collab:extractionDone', {
+          jobId: job.id,
+          sessionId,
+          jobType: 'all',
+          result: { mode: 'noop', tasksExtracted: 0 },
+        })
+        return
+      }
+    }
+    const maxMessageId = allMessages.reduce((mx, m) => (m.id > mx ? m.id : mx), 0)
 
-    reportProgress(10, `全量分析 · 共 ${messages.length} 条消息`)
+    reportProgress(
+      10,
+      `${mode === 'incremental' ? '增量分析' : '全量分析'} · 共 ${messages.length} 条消息`
+    )
 
     const batchSize = 30
     const overlap = 5
@@ -1866,9 +1930,9 @@ export async function startUnifiedExtraction(
       tipsExtracted: savedTips,
       nodesExtracted: savedNodes,
       edgesExtracted: savedEdges,
-      // 保留最后一次扫描到的消息 ID 作为审计信息（不再用于增量跳过）
+      // 下次默认运行（forceRerun=false）只处理 id > lastAnalyzedMessageId 的新消息
       lastAnalyzedMessageId: maxMessageId,
-      mode: 'full',
+      mode,
     })
 
     reportProgress(

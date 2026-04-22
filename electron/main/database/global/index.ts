@@ -86,6 +86,40 @@ function migrateCollaborationDb(db: Database.Database): void {
  * 初始化 collaboration.db 的表结构
  */
 function initializeCollaborationDb(db: Database.Database): void {
+  // ========== 防御性迁移：清理老 DB 里可能残留的重复活跃 job ==========
+  // 下面 CREATE UNIQUE INDEX 是 partial index (WHERE status IN ('pending','running'))。
+  // 在旧 DB 上：若历史 bug 留下同 (session, jobType) 的两条以上 pending/running 行，
+  // CREATE INDEX 会抛 UNIQUE constraint failed，整个 initializeCollaborationDb
+  // 会失败，主进程启动挂掉。
+  //
+  // 先 upgrade 已存在的 extraction_job 表，把每个 (session, jobType) 组里多余的
+  // 活跃行置为 cancelled，只保留 created_at 最新的一条。CREATE TABLE IF NOT EXISTS
+  // 对新库是 no-op，对老库已经有表，这个 UPDATE 才有意义。
+  try {
+    const tableExists = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='extraction_job'")
+      .get()
+    if (tableExists) {
+      db.prepare(
+        `UPDATE extraction_job
+         SET status = 'cancelled', finished_at = ?, error_code = 'MIGRATION_DEDUP', error_detail = 'Cancelled by migration: duplicate active job'
+         WHERE status IN ('pending', 'running')
+           AND id NOT IN (
+             SELECT id FROM extraction_job j1
+             WHERE status IN ('pending', 'running')
+               AND created_at = (
+                 SELECT MAX(j2.created_at) FROM extraction_job j2
+                 WHERE j2.session_id = j1.session_id
+                   AND j2.job_type = j1.job_type
+                   AND j2.status IN ('pending', 'running')
+               )
+           )`
+      ).run(Date.now())
+    }
+  } catch (err) {
+    console.warn('[GlobalDB] Pre-index dedup migration skipped:', err)
+  }
+
   db.exec(`
     -- AI 提取任务表
     CREATE TABLE IF NOT EXISTS extraction_job (

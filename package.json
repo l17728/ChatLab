@@ -31,7 +31,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "PWHEADLESS=false playwright test",
-    "test:e2e:regression": "playwright test tests/e2e/webui-sessions.regression.spec.ts tests/e2e/webui-ui-consistency.spec.ts",
+    "test:e2e:regression": "playwright test tests/e2e/webui-sessions.regression.spec.ts tests/e2e/webui-ui-consistency.spec.ts tests/e2e/ai-analysis-regression.spec.ts",
+    "test:e2e:ai-regression": "playwright test tests/e2e/ai-analysis-regression.spec.ts",
     "test:e2e:consistency": "playwright test tests/e2e/webui-ui-consistency.spec.ts",
     "test:regression": "pnpm test:unit && pnpm test:e2e:regression",
     "postinstall": "electron-rebuild"

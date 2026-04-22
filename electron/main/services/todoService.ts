@@ -62,7 +62,8 @@ export class TodoService {
    * 按 (globalUserId, 归一化标题) 查找已存在待办，跨批次去重。
    */
   findIdByNormalizedTitle(globalUserId: string, title: string): number | null {
-    const normalized = title.trim().toLowerCase().replace(/\s+/g, ' ')
+    // 归一化规则与 SQLite `LOWER(TRIM(title))` 严格一致，让 idx_todo_norm_title 命中
+    const normalized = title.trim().toLowerCase()
     if (!normalized) return null
     const row = this.db
       .prepare(

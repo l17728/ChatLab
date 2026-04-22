@@ -72,10 +72,11 @@ export class TaskService {
    */
   /**
    * 按归一化后的标题查找已存在任务，用于跨批次/跨次运行时去重合并源头。
-   * 归一化规则：小写 + 去首尾空白 + 压缩多空白为单空格，与 SQLite 保持一致。
+   * 归一化规则：小写 + 去首尾空白，与 SQLite `LOWER(TRIM(title))` 严格一致。
+   * 不做多空白压缩——否则索引 idx_task_norm_title 无法命中，dedup 退化为全表扫。
    */
   findIdByNormalizedTitle(title: string): number | null {
-    const normalized = title.trim().toLowerCase().replace(/\s+/g, ' ')
+    const normalized = title.trim().toLowerCase()
     if (!normalized) return null
     const row = this.db
       .prepare(
