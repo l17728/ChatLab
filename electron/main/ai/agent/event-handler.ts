@@ -9,6 +9,7 @@ import type { Message as PiMessage, Usage as PiUsage } from '@mariozechner/pi-ai
 import type { TokenUsage, AgentRuntimeStatus } from '../../../shared/types'
 import type { ToolContext } from '../tools/types'
 import type { AgentStreamChunk } from './types'
+import { isDebugMode } from '../logger'
 
 export interface EventHandlerConfig {
   onChunk: (chunk: AgentStreamChunk) => void
@@ -110,11 +111,17 @@ export class AgentEventHandler {
   ): (event: PiAgentEvent) => void {
     let hasReachedToolRoundLimit = false
     const thinkingStartTime = new Map<number, number>()
+    const toolStartTime = new Map<string, number>()
+    let textDeltaCount = 0
 
     return (event: PiAgentEvent) => {
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
         if (update.type === 'text_delta') {
+          textDeltaCount++
+          if (textDeltaCount === 1 && isDebugMode()) {
+            console.log('[AI-DEBUG] [EventHandler] 首个 text_delta 到达')
+          }
           this.onChunk({ type: 'content', content: update.delta })
           this.emitStatus('responding', coreAgent.state.messages)
         } else if (update.type === 'thinking_start') {
@@ -133,12 +140,22 @@ export class AgentEventHandler {
       } else if (event.type === 'tool_execution_start') {
         const params = this.normalizeToolParams(event.toolName, (event.args || {}) as Record<string, unknown>)
         this.toolsUsed.push(event.toolName)
+        toolStartTime.set(event.toolName, Date.now())
+        if (isDebugMode()) console.log(`[AI-DEBUG] [EventHandler] Tool 开始: ${event.toolName}`, params)
         this.onChunk({ type: 'tool_start', toolName: event.toolName, toolParams: params })
         this.emitStatus('tool_running', coreAgent.state.messages, { currentTool: event.toolName, force: true })
       } else if (event.type === 'tool_execution_end') {
+        const toolElapsed = toolStartTime.has(event.toolName) ? Date.now() - toolStartTime.get(event.toolName)! : -1
+        toolStartTime.delete(event.toolName)
+        if (isDebugMode()) console.log(`[AI-DEBUG] [EventHandler] Tool 完成: ${event.toolName}，耗时: ${toolElapsed}ms`)
         this.onChunk({ type: 'tool_result', toolName: event.toolName, toolResult: event.result })
         this.emitStatus('thinking', coreAgent.state.messages, { force: true })
       } else if (event.type === 'turn_end') {
+        if (isDebugMode()) {
+          console.log(
+            `[AI-DEBUG] [EventHandler] Turn 结束，toolResults: ${event.toolResults.length}，textDeltas: ${textDeltaCount}`
+          )
+        }
         if (event.toolResults.length > 0) {
           this.toolRounds += 1
           if (!hasReachedToolRoundLimit && maxToolRounds > 0 && this.toolRounds >= maxToolRounds) {

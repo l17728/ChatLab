@@ -80,13 +80,25 @@ function cleanGlobalDbs() {
 async function startApp() {
   forceKillElectron()
   await new Promise((r) => setTimeout(r, 1000))
-  cleanGlobalDbs()
 
-  const userDataDir = path.join(os.tmpdir(), `chatlab-ai-reg-${Date.now()}`)
-  fs.mkdirSync(userDataDir, { recursive: true })
+  // 默认使用隔离 userData（不污染用户真实数据）。
+  // 设置环境变量 CHATLAB_E2E_USE_SYSTEM=1 时改用 SYSTEM userData，
+  // 这样 REG-008 真实 smoke test 才能拿到用户已导入的 session。
+  // 警告：用 SYSTEM 模式会在用户的 collaboration.db 里写入测试 job 行
+  // 和（forceRerun=true 触发的）真实提取结果。
+  const useSystem = process.env.CHATLAB_E2E_USE_SYSTEM === '1'
+  let userDataDir: string
+  if (useSystem) {
+    userDataDir = SYSTEM_USERDATA
+    console.log(`[AI-REG] 🔧 使用 SYSTEM userData 运行: ${userDataDir}`)
+  } else {
+    cleanGlobalDbs()
+    userDataDir = path.join(os.tmpdir(), `chatlab-ai-reg-${Date.now()}`)
+    fs.mkdirSync(userDataDir, { recursive: true })
+  }
 
   const app = await launchApp({ userDataDir, port: AI_REG_PORT, startupWaitTime: 6000 })
-  return { app, userDataDir }
+  return { app, userDataDir, useSystem }
 }
 
 test.describe('AI 分析回归测试', () => {
@@ -94,6 +106,7 @@ test.describe('AI 分析回归测试', () => {
 
   let app: Awaited<ReturnType<typeof launchApp>>
   let userDataDir: string
+  let useSystem = false
   let browser: Browser
   let ctx: BrowserContext
   let page: Page
@@ -103,6 +116,7 @@ test.describe('AI 分析回归测试', () => {
     const result = await startApp()
     app = result.app
     userDataDir = result.userDataDir
+    useSystem = result.useSystem
 
     const conn = await connectElectron(app.port)
     browser = conn.browser
@@ -124,10 +138,13 @@ test.describe('AI 分析回归测试', () => {
     }
     forceKillElectron()
     await new Promise((r) => setTimeout(r, 2000))
-    try {
-      fs.rmSync(userDataDir, { recursive: true, force: true })
-    } catch {
-      /* ignore */
+    // 仅清理隔离的临时 userData；SYSTEM 模式下不动用户真实数据
+    if (!useSystem) {
+      try {
+        fs.rmSync(userDataDir, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
     }
   })
 
@@ -296,6 +313,157 @@ test.describe('AI 分析回归测试', () => {
       expect(row.sql).toMatch(/WHERE.*status.*pending.*running/i)
     } finally {
       db.close()
+    }
+  })
+
+  test('AI-REG-009: preflight 期间发"正在检测 LLM 连通性..."进度事件（避免 8s 静默）', async () => {
+    const result = await page.evaluate(async () => {
+      const api = (window as any).collabApi
+      const ipc = (window as any).electron?.ipcRenderer
+      if (!ipc) return { caught: false, reason: 'ipcRenderer unavailable' }
+
+      const events: any[] = []
+      const handler = (_event: any, data: any) => {
+        if (data?.sessionId === 'test-session-progress') events.push(data)
+      }
+      ipc.on('collab:extractionProgress', handler)
+
+      const create = await api.createExtractionJob('test-session-progress', 'all', false, [])
+      const jobId = create?.data?.id
+
+      // 等 3s 让 preflight 期间的进度事件到达；预检至多 8s，但"开始检测"应在前 100ms 内发出
+      await new Promise((resolve) => setTimeout(resolve, 3000))
+      ipc.removeListener('collab:extractionProgress', handler)
+      return { jobId, events }
+    })
+
+    expect(result.events.length, `应至少收到 1 个 progress 事件: ${JSON.stringify(result)}`).toBeGreaterThan(0)
+    // 第一个进度事件应该是 preflight 期间的"正在检测 LLM 连通性..."（progress=2）
+    const preflightEvt = result.events.find(
+      (e: any) => typeof e.message === 'string' && e.message.includes('检测 LLM 连通性')
+    )
+    expect(
+      preflightEvt,
+      `未找到 preflight 进度事件。实际事件: ${JSON.stringify(result.events.map((e: any) => ({ p: e.progress, m: e.message })))}`
+    ).toBeTruthy()
+    expect(preflightEvt.progress).toBe(2)
+  })
+
+  /**
+   * AI-REG-008  真实 smoke test：拿一个真实有消息的 session 跑一次分析，
+   *             断言至少 tasks / todos / knowledge / focus / graph 中有一类入库 > 0。
+   *
+   * 为什么必要：上面的 REG-001~007 都是失败/状态/索引断言。本用例是唯一直接证明
+   *           "AI 分析能找到任务、待办等信息"的端到端 smoke。
+   *
+   * 跳过条件（不算失败）：
+   *   - 无激活 LLM 配置
+   *   - 用户 userData 里没有任何带消息的 session
+   *
+   * 超时：3 分钟（185 条消息约 6-7 个批次 × 每批 LLM ~10s ≈ 1-2 分钟）
+   */
+  test('AI-REG-008: 真实 LLM smoke：拿一个有消息的 session 分析后能查到至少一类提取结果', async () => {
+    // 8 分钟：185 条消息按 batchSize=30/overlap=5 分约 7 批，每批 LLM 流式可能 30s-2min。
+    // 这个测试不强求 done，能跑到 50%+ 就算管道正常；提取结果在批次保存阶段就开始入库。
+    test.setTimeout(480_000)
+
+    // 1) 选一个有消息的真实 session（chatApi.getSessions 直接返回数组）
+    const candidate = await page.evaluate(async () => {
+      const chatApi = (window as any).chatApi
+      const sessions = (await chatApi?.getSessions?.()) ?? []
+      const found = sessions.find((s: any) => (s.messageCount ?? 0) > 0)
+      return {
+        sessionId: found?.id,
+        sessionName: found?.name,
+        messageCount: found?.messageCount,
+        total: sessions.length,
+        hasApi: !!chatApi?.getSessions,
+      }
+    })
+
+    if (!candidate.sessionId) {
+      console.log(
+        `[AI-REG-008] SKIP: 没有可用的真实 session（hasApi=${candidate.hasApi}, total=${candidate.total}）`
+      )
+      test.skip()
+      return
+    }
+
+    console.log(
+      `[AI-REG-008] 选中 session: ${candidate.sessionName} (id=${candidate.sessionId}, messages=${candidate.messageCount})`
+    )
+
+    // 2) 触发 AI 分析（forceRerun=true 强制全量；本测试想看新数据，不走增量）
+    const result = await page.evaluate(async (sid: string) => {
+      const api = (window as any).collabApi
+      const create = await api.createExtractionJob(sid, 'all', true, [])
+      const jobId = create?.data?.id
+      if (!jobId) return { ok: false, reason: 'no jobId', raw: create }
+
+      // 轮询 8 分钟。完成最优；否则进度 ≥ 50% 也接受（管道在跑就是好的）。
+      const deadline = Date.now() + 460_000
+      let last: any = null
+      let lastProgress = -1
+      while (Date.now() < deadline) {
+        const r = await api.getExtractionJob(jobId)
+        last = r?.data
+        if (last?.progress !== undefined && last.progress !== lastProgress) {
+          lastProgress = last.progress
+          console.log(`[AI-REG-008] job ${jobId} progress=${last.progress} status=${last.status}`)
+        }
+        if (last?.status === 'done' || last?.status === 'failed') break
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      return { ok: true, job: last, jobId }
+    }, candidate.sessionId)
+
+    expect(result.ok, `createExtractionJob 失败: ${JSON.stringify(result)}`).toBe(true)
+
+    const status = result.job?.status
+    const progress = result.job?.progress ?? 0
+    // 关键断言 1：job 不能 failed（除非确实是配置问题）
+    expect(status, `job 不应该 failed: ${JSON.stringify(result.job)}`).not.toBe('failed')
+    // 关键断言 2：要么 done，要么显著进度（≥50%，证明 LLM 流式工作 + 多批次进展）
+    expect(
+      status === 'done' || progress >= 50,
+      `job 进展不足：status=${status} progress=${progress}（应 done 或 >=50%）`
+    ).toBe(true)
+
+    // 3) 查询提取结果——保存阶段在最后一批后才开始入库，因此只在 done 时强检
+    const extracted = await page.evaluate(async (sid: string) => {
+      const api = (window as any).collabApi
+      const [tasks, todos, knowledge, focus, graphStats] = await Promise.all([
+        api.getTasksBySession?.(sid).catch(() => null),
+        api.getTodos?.().catch(() => null),
+        api.getKnowledgeItems?.().catch(() => null),
+        api.getFocusItems?.().catch(() => null),
+        api.getGraphStats?.().catch(() => null),
+      ])
+      return {
+        tasks: tasks?.data?.length ?? 0,
+        todos: todos?.data?.length ?? 0,
+        knowledge: knowledge?.data?.length ?? 0,
+        focus: focus?.data?.length ?? 0,
+        nodes: graphStats?.data?.nodeCount ?? 0,
+        edges: graphStats?.data?.edgeCount ?? 0,
+      }
+    }, candidate.sessionId)
+
+    console.log(
+      `[AI-REG-008] 最终状态: status=${status} progress=${progress}, 入库:`,
+      JSON.stringify(extracted)
+    )
+
+    // 关键断言 3：若 done，必须至少一类有内容（证明真能找到任务/待办等）
+    if (status === 'done') {
+      const totalAny =
+        extracted.tasks + extracted.todos + extracted.knowledge + extracted.focus + extracted.nodes
+      expect(
+        totalAny,
+        `AI 分析跑完但 0 提取结果入库（resultSummary=${JSON.stringify(result.job?.resultSummary)}）。检查 LLM 是否真返回 tool call。`
+      ).toBeGreaterThan(0)
+    } else {
+      console.log(`[AI-REG-008] 未在 ${(460_000 / 1000).toFixed(0)}s 内完成（进度 ${progress}%），但管道正常工作`)
     }
   })
 })

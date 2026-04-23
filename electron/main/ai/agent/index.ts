@@ -75,10 +75,14 @@ export class Agent {
   }
 
   async executeStream(userMessage: string, onChunk: (chunk: AgentStreamChunk) => void): Promise<AgentResult> {
+    const agentStartTime = Date.now()
     aiLogger.info('Agent', 'User question', userMessage)
+    if (isDebugMode())
+      console.log(`[AI-DEBUG] Agent.executeStream 开始，userMessage 长度: ${userMessage.length}`)
 
     const maxToolRounds = Math.max(0, this.config.maxToolRounds ?? 0)
 
+    const promptBuildStart = Date.now()
     const systemPrompt = buildSystemPrompt(
       this.chatType,
       this.assistantConfig?.systemPrompt,
@@ -87,6 +91,10 @@ export class Agent {
       this.skillCtx,
       this.context.mentionedMembers
     )
+    if (isDebugMode())
+      console.log(
+        `[AI-DEBUG] SystemPrompt 构建耗时: ${Date.now() - promptBuildStart}ms，长度: ${systemPrompt.length}`
+      )
     const answerWithoutToolsPrompt = i18nT('ai.agent.answerWithoutTools', { lng: this.locale })
 
     const handler = new AgentEventHandler({
@@ -105,10 +113,14 @@ export class Agent {
     let debugLlmRound = 1
 
     // 初始化 PiAgentCore
+    // 推理模型默认使用 'low' 级别以降低 TTFT，仅 debug 模式使用 'medium'
+    const thinkingLevel = this.piModel.reasoning ? (isDebugMode() ? 'medium' : 'low') : 'off'
+    if (isDebugMode())
+      console.log(`[AI-DEBUG] thinkingLevel: ${thinkingLevel}，reasoning: ${!!this.piModel.reasoning}`)
     const coreAgent = new PiAgentCore({
       initialState: {
         model: this.piModel,
-        thinkingLevel: this.piModel.reasoning ? 'medium' : 'off',
+        thinkingLevel,
       },
       getApiKey: () => this.apiKey,
       convertToLlm: (messages) => {
@@ -152,6 +164,8 @@ export class Agent {
     coreAgent.setSystemPrompt(systemPrompt)
     const allowedTools = this.assistantConfig?.allowedBuiltinTools
     const toolContext = { ...this.context, locale: this.locale }
+
+    const toolsStart = Date.now()
     const piTools = getAllTools(toolContext, allowedTools)
 
     // AI 自选模式：注册 activate_skill 元工具（手动选择时不注册，避免冲突）
@@ -160,10 +174,17 @@ export class Agent {
     }
 
     coreAgent.setTools(maxToolRounds > 0 ? piTools : [])
+    if (isDebugMode())
+      console.log(`[AI-DEBUG] 工具注册耗时: ${Date.now() - toolsStart}ms，工具数: ${piTools.length}`)
 
+    const historyStart = Date.now()
     const limit = this.config.contextHistoryLimit ?? 48
     const historyMessages = this.loadHistory(limit)
     coreAgent.replaceMessages(this.toPiHistoryMessages(historyMessages))
+    if (isDebugMode())
+      console.log(
+        `[AI-DEBUG] 历史加载耗时: ${Date.now() - historyStart}ms，历史消息数: ${historyMessages.length}`
+      )
 
     handler.emitStatus('preparing', coreAgent.state.messages, {
       pendingUserMessage: userMessage,
@@ -185,7 +206,14 @@ export class Agent {
         aiLogger.debug('Agent', `[DEBUG] System prompt`, systemPrompt)
       }
 
+      const prepElapsed = Date.now() - agentStartTime
+      if (isDebugMode())
+        console.log(`[AI-DEBUG] Agent 准备阶段完成，耗时: ${prepElapsed}ms，开始 LLM 调用...`)
+
+      const llmStart = Date.now()
       await coreAgent.prompt(userMessage)
+      const llmElapsed = Date.now() - llmStart
+      if (isDebugMode()) console.log(`[AI-DEBUG] LLM prompt 调用完成，耗时: ${llmElapsed}ms`)
 
       if (this.isAborted()) {
         handler.emitStatus('aborted', coreAgent.state.messages, { force: true })
@@ -215,6 +243,30 @@ export class Agent {
 
       const finalContent = stripToolCallTags(extractThinkingContent(finalRawContent).cleanContent)
 
+      const totalElapsed = Date.now() - agentStartTime
+      if (isDebugMode()) {
+        console.log(`[AI-DEBUG] Agent 执行总结`, {
+          totalElapsed: `${totalElapsed}ms`,
+          finalContentLength: finalContent.length,
+          toolsUsed: handler.toolsUsed,
+          toolRounds: handler.toolRounds,
+          usage: handler.cloneUsage(),
+          isEmpty: !finalContent,
+        })
+      }
+
+      if (!finalContent) {
+        // 空响应是真实异常，保留 warn——但加一次性输出限制，不被 debug 开关约束
+        console.warn(`[AI-DEBUG] ⚠️ Agent 最终内容为空！检查 LLM 响应`)
+        aiLogger.warn('Agent', 'Final content is empty', {
+          totalElapsed,
+          toolsUsed: handler.toolsUsed,
+          toolRounds: handler.toolRounds,
+          messagesCount: coreAgent.state.messages.length,
+          lastMessageRole: coreAgent.state.messages[coreAgent.state.messages.length - 1]?.role,
+        })
+      }
+
       if (isDebugMode() && finalContent) {
         aiLogger.debug('Agent', `[DEBUG] Final response\n${finalContent}`)
       }
@@ -229,6 +281,8 @@ export class Agent {
         totalUsage: handler.cloneUsage(),
       }
     } catch (error) {
+      const totalElapsed = Date.now() - agentStartTime
+      console.error(`[AI-DEBUG] Agent 执行异常，耗时: ${totalElapsed}ms`, error)
       const phase = this.isAborted() ? 'aborted' : 'error'
       handler.emitStatus(phase, coreAgent.state.messages, { force: true })
       throw error

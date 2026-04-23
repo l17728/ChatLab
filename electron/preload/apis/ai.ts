@@ -28,8 +28,12 @@ export interface AIConversation {
 }
 
 // 内容块类型（用于 AI 消息的混合渲染）
+// 必须与 src/stores/aiChat.ts 的 ContentBlock 联合分支保持一致——
+// 跨 IPC 边界存到 ai_message.content_blocks 列再读回来，缺哪个分支
+// 哪个分支就会被丢失。
 export type ContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'think'; tag: string; text: string; durationMs?: number }
   | {
       type: 'tool'
       tool: {
@@ -590,6 +594,18 @@ export const llmApi = {
    */
   hasConfig: (): Promise<boolean> => {
     return ipcRenderer.invoke('llm:hasConfig')
+  },
+
+  /**
+   * 测试当前激活配置的 LLM 连通性
+   */
+  testConnection: (): Promise<{
+    success: boolean
+    error?: string
+    details?: Record<string, unknown>
+  }> => {
+    console.log('[preload] LLM 连通性测试请求')
+    return ipcRenderer.invoke('llm:testConnection')
   },
 
   /**
