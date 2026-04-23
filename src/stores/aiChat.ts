@@ -597,6 +597,16 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
       mentionText: member.mentionText,
     }))
 
+    console.log(`[AI-DEBUG] sendMessage 开始`, {
+      chatKey,
+      sessionId: state.sessionId,
+      contentLength: content.length,
+      contentPreview: content.slice(0, 100),
+      requestId: thisRequestId,
+      assistantId: state.selectedAssistantId,
+      hasTimeFilter: !!state.timeFilter,
+    })
+
     state.isAIThinking = true
     state.isLoadingSource = true
     state.currentToolStatus = null
@@ -607,7 +617,9 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
     state.currentAgentRequestId = ''
 
     try {
+      console.log('[AI-DEBUG] 检查 LLM 配置...')
       const hasConfig = await window.llmApi.hasConfig()
+      console.log(`[AI-DEBUG] LLM 配置检查结果: ${hasConfig}`)
       if (state.isAborted) {
         clearActiveTask(chatKey, thisRequestId)
         return { success: false, reason: 'aborted' }
@@ -656,6 +668,10 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
       targetBuffer.messages.push(aiMessage)
       const aiMessageIndex = targetBuffer.messages.length - 1
       let hasStreamError = false
+      let hasReceivedContent = false
+      let streamChunkCount = 0
+      let toolCallCount = 0
+      const streamStartTime = Date.now()
 
       const updateAIMessage = (updates: Partial<ChatMessage>) => {
         targetBuffer.messages[aiMessageIndex] = {
@@ -802,6 +818,16 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
         preprocessConfig: serializablePreprocessConfig,
       }
 
+      console.log('[AI-DEBUG] 调用 agentApi.runStream', {
+        sessionId: context.sessionId,
+        conversationId: context.conversationId,
+        chatType: state.chatType,
+        assistantId: currentAssistantId,
+        skillId: currentSkillId,
+        maxHistoryRounds,
+        hasPreprocess,
+      })
+
       const { requestId: agentReqId, promise: agentPromise } = window.agentApi.runStream(
         content,
         context,
@@ -810,9 +836,20 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
             return
           }
 
+          streamChunkCount++
+          if (streamChunkCount === 1) {
+            console.log(
+              `[AI-DEBUG] 首个 stream chunk 到达，类型: ${chunk.type}，耗时: ${Date.now() - streamStartTime}ms`
+            )
+          }
+
           switch (chunk.type) {
             case 'content':
               if (chunk.content) {
+                if (!hasReceivedContent) {
+                  hasReceivedContent = true
+                  console.log(`[AI-DEBUG] 首个 content chunk 到达，耗时: ${Date.now() - streamStartTime}ms`)
+                }
                 state.currentToolStatus = null
                 appendTextToBlocks(chunk.content)
               }
@@ -828,6 +865,8 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
 
             case 'tool_start':
               if (chunk.toolName) {
+                toolCallCount++
+                console.log(`[AI-DEBUG] Tool 调用 #${toolCallCount}: ${chunk.toolName}`, chunk.toolParams)
                 const toolParams = chunk.toolParams as Record<string, unknown> | undefined
                 state.currentToolStatus = {
                   name: chunk.toolName,
@@ -841,6 +880,7 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
 
             case 'tool_result':
               if (chunk.toolName) {
+                console.log(`[AI-DEBUG] Tool 完成: ${chunk.toolName}，耗时: ${Date.now() - streamStartTime}ms`)
                 if (state.currentToolStatus?.name === chunk.toolName) {
                   state.currentToolStatus = {
                     ...state.currentToolStatus,
@@ -859,6 +899,10 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
               break
 
             case 'done':
+              console.log(
+                `[AI-DEBUG] Stream 完成，总耗时: ${Date.now() - streamStartTime}ms，chunks: ${streamChunkCount}，tools: ${toolCallCount}，收到内容: ${hasReceivedContent}`,
+                chunk.usage
+              )
               state.currentToolStatus = null
               if (chunk.usage) {
                 state.sessionTokenUsage = {
@@ -871,6 +915,7 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
               break
 
             case 'error':
+              console.error(`[AI-DEBUG] Stream 错误，耗时: ${Date.now() - streamStartTime}ms，error:`, chunk.error)
               if (state.currentToolStatus) {
                 state.currentToolStatus = {
                   ...state.currentToolStatus,
@@ -899,6 +944,19 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
       setActiveTaskMeta(chatKey, content, agentReqId, resolvedConversationId)
 
       const result = await agentPromise
+      const totalElapsed = Date.now() - streamStartTime
+      console.log(`[AI-DEBUG] agentPromise resolved，总耗时: ${totalElapsed}ms`, {
+        success: result.success,
+        hasResult: !!result.result,
+        error: result.error,
+        contentLength: result.result?.content?.length ?? 0,
+        toolsUsed: result.result?.toolsUsed ?? [],
+        toolRounds: result.result?.toolRounds ?? 0,
+        hasReceivedContent,
+        streamChunkCount,
+        hasStreamError,
+      })
+
       if (state.isAborted) {
         clearActiveTask(chatKey, agentReqId)
         return { success: false, reason: 'aborted' }
@@ -910,6 +968,25 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
       }
 
       if (result.success && result.result) {
+        // 空结果保护：成功但没有任何内容输出
+        if (!hasReceivedContent && !result.result.content) {
+          console.warn('[AI-DEBUG] ⚠️ 空结果检测！Agent 成功返回但无内容', {
+            toolsUsed: result.result.toolsUsed,
+            toolRounds: result.result.toolRounds,
+            totalElapsed,
+          })
+          appendTextToBlocks(
+            `\n\n⚠️ AI 返回了空结果（耗时 ${(totalElapsed / 1000).toFixed(1)}s）\n\n` +
+              `可能原因：\n` +
+              `- API Key 无效或过期\n` +
+              `- 模型不支持当前请求格式\n` +
+              `- 网络连接中断\n` +
+              `- 模型返回了空响应\n\n` +
+              `诊断信息：tools=${result.result.toolsUsed.length}，rounds=${result.result.toolRounds}，chunks=${streamChunkCount}\n` +
+              `请打开「设置 → 关于 → Debug模式」查看详细日志，或使用「设置 → 模型配置 → 连通性测试」检查 API 连接。`
+          )
+        }
+
         targetBuffer.messages[aiMessageIndex] = {
           ...targetBuffer.messages[aiMessageIndex],
           dataSource: {
@@ -921,6 +998,7 @@ export const useAIChatStore = defineStore('aiChatRuntime', () => {
 
         await saveConversation(resolvedConversationId, userMessage, targetBuffer.messages[aiMessageIndex])
       } else if (!hasStreamError) {
+        console.error('[AI-DEBUG] Agent 返回失败', { error: result.error, totalElapsed })
         appendTextToBlocks(`\n\n❌ 处理失败：${result.error || '未知错误'}`)
         targetBuffer.messages[aiMessageIndex] = {
           ...targetBuffer.messages[aiMessageIndex],

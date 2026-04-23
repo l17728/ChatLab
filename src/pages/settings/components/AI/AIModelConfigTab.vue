@@ -81,6 +81,35 @@ function getProviderName(providerId: string): string {
   return llmStore.getProviderName(providerId)
 }
 
+// ============ 连通性测试 ============
+
+const isTestingConnection = ref(false)
+const connectionTestResult = ref<{
+  success: boolean
+  error?: string
+  details?: Record<string, unknown>
+} | null>(null)
+
+async function testConnection() {
+  if (isTestingConnection.value) return
+  isTestingConnection.value = true
+  connectionTestResult.value = null
+  console.log('[AI-DEBUG] 用户触发 LLM 连通性测试')
+  try {
+    const result = await window.llmApi.testConnection()
+    connectionTestResult.value = result
+    console.log('[AI-DEBUG] 连通性测试结果:', result)
+  } catch (error) {
+    console.error('[AI-DEBUG] 连通性测试异常:', error)
+    connectionTestResult.value = {
+      success: false,
+      error: String(error),
+    }
+  } finally {
+    isTestingConnection.value = false
+  }
+}
+
 // ============ 暴露方法 ============
 
 function refresh() {
@@ -184,12 +213,60 @@ onMounted(() => {
       <p class="text-xs text-gray-400 dark:text-gray-500">{{ t('settings.aiConfig.empty.description') }}</p>
     </div>
 
-    <!-- 添加按钮 -->
-    <div class="flex justify-center">
-      <UButton variant="soft" :disabled="isMaxConfigs" class="mt-4" @click="openAddModal">
+    <!-- 添加按钮 + 连通性测试 -->
+    <div class="flex items-center justify-center gap-3 mt-4">
+      <UButton variant="soft" :disabled="isMaxConfigs" @click="openAddModal">
         <UIcon name="i-heroicons-plus" class="mr-2 h-4 w-4" />
         {{ isMaxConfigs ? t('settings.aiConfig.maxConfigs') : t('settings.aiConfig.addConfig') }}
       </UButton>
+
+      <UButton v-if="configs.length > 0" variant="outline" :loading="isTestingConnection" @click="testConnection">
+        <UIcon name="i-heroicons-signal" class="mr-1 h-4 w-4" />
+        {{ isTestingConnection ? t('settings.basic.network.testing') : t('settings.basic.network.testConnection') }}
+      </UButton>
+    </div>
+
+    <!-- 连通性测试结果 -->
+    <div
+      v-if="connectionTestResult"
+      class="mt-3 rounded-lg border p-3 text-sm"
+      :class="[
+        connectionTestResult.success
+          ? 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/20'
+          : 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20',
+      ]"
+    >
+      <div class="flex items-center gap-2">
+        <UIcon
+          :name="connectionTestResult.success ? 'i-heroicons-check-circle' : 'i-heroicons-x-circle'"
+          class="h-5 w-5"
+          :class="connectionTestResult.success ? 'text-green-500' : 'text-red-500'"
+        />
+        <span
+          :class="
+            connectionTestResult.success ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'
+          "
+        >
+          {{ connectionTestResult.success ? 'API 连接正常' : 'API 连接失败' }}
+        </span>
+      </div>
+      <div v-if="connectionTestResult.details" class="mt-2 text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
+        <div v-if="connectionTestResult.details.provider">
+          Provider: {{ connectionTestResult.details.provider }} | Model: {{ connectionTestResult.details.model }}
+        </div>
+        <div v-if="connectionTestResult.details.llmElapsed">
+          LLM 响应耗时: {{ connectionTestResult.details.llmElapsed }}ms
+        </div>
+        <div v-if="connectionTestResult.details.totalElapsed">
+          总耗时: {{ connectionTestResult.details.totalElapsed }}ms
+        </div>
+        <div v-if="connectionTestResult.details.phase && !connectionTestResult.success">
+          失败阶段: {{ connectionTestResult.details.phase }}
+        </div>
+      </div>
+      <div v-if="connectionTestResult.error" class="mt-2 text-xs text-red-600 dark:text-red-400 break-all">
+        {{ connectionTestResult.error }}
+      </div>
     </div>
   </div>
 

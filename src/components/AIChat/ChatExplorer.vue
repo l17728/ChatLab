@@ -17,6 +17,7 @@ import AssistantMarketModal from './assistant/AssistantMarketModal.vue'
 import SkillMarketModal from './skill/SkillMarketModal.vue'
 import SkillConfigModal from './skill/SkillConfigModal.vue'
 import PresetQuestions from './input/PresetQuestions.vue'
+import AIDebugPanel from './chat/AIDebugPanel.vue'
 import { usePromptStore } from '@/stores/prompt'
 import { useSettingsStore } from '@/stores/settings'
 import { useAssistantStore } from '@/stores/assistant'
@@ -615,6 +616,16 @@ watch(
                 />
               </div>
             </div>
+
+            <!-- AI 调试面板（仅 Debug 模式下显示） -->
+            <AIDebugPanel
+              v-if="settingsStore.debugMode"
+              :is-a-i-thinking="isAIThinking"
+              :agent-status="agentStatus"
+              :current-tool-status="currentToolStatus"
+              :tools-used-in-current-round="toolsUsedInCurrentRound"
+              :session-token-usage="sessionTokenUsage"
+            />
           </div>
           <!-- closes relative flex min-w-[480px] -->
         </div>
