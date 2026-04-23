@@ -394,6 +394,8 @@ export function deleteMessage(messageId: string): boolean {
  * 为 Agent 提供对话历史
  *
  * 返回简化的 {role, content} 格式，按时间升序排列。
+ * 使用 SQL LIMIT 直接在数据库层面限制返回条数，避免加载全部历史再截断。
+ *
  * @param conversationId 对话 ID
  * @param maxMessages 最大返回条数（取最近 N 条）
  */
@@ -401,13 +403,28 @@ export function getHistoryForAgent(
   conversationId: string,
   maxMessages?: number
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
-  const messages = getMessages(conversationId)
-  const filtered = messages
-    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content?.trim())
-    .map((m) => ({ role: m.role, content: m.content }))
+  const db = getAiDb()
 
-  if (maxMessages && filtered.length > maxMessages) {
-    return filtered.slice(-maxMessages)
-  }
-  return filtered
+  // 直接在 SQL 层过滤 role 并限制条数，避免加载全部消息后 JS 截断
+  const limit = maxMessages ?? 48
+  const rows = db
+    .prepare(
+      `
+    SELECT role, content
+    FROM ai_message
+    WHERE conversation_id = ?
+      AND role IN ('user', 'assistant')
+      AND content IS NOT NULL
+      AND TRIM(content) != ''
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `
+    )
+    .all(conversationId, limit) as Array<{ role: string; content: string }>
+
+  // DESC 取最近的 N 条后，反转为时间正序
+  return rows.reverse().map((row) => ({
+    role: row.role as 'user' | 'assistant',
+    content: row.content,
+  }))
 }

@@ -205,6 +205,26 @@ function anonymizeMessageNames(messages: PreprocessableMessage[], ownerPlatformI
   return `[Name Map] ${entries.join(' | ')}`
 }
 
+// ==================== 工具缓存 ====================
+
+interface ToolCacheEntry {
+  tools: AgentTool<any>[]
+  createdAt: number
+}
+
+const TOOL_CACHE_TTL = 60_000 // 60 秒缓存
+const toolCache = new Map<string, ToolCacheEntry>()
+
+function buildToolCacheKey(
+  sessionId: string,
+  locale?: string,
+  allowedTools?: string[],
+  embeddingEnabled?: boolean
+): string {
+  const allowed = allowedTools ? [...allowedTools].sort().join(',') : '*'
+  return `${sessionId}:${locale ?? 'zh-CN'}:${allowed}:${embeddingEnabled ? '1' : '0'}`
+}
+
 /**
  * 获取所有可用的 AgentTool
  *
@@ -212,13 +232,25 @@ function anonymizeMessageNames(messages: PreprocessableMessage[], ownerPlatformI
  * 根据当前 locale 动态翻译工具描述
  * 统一包装预处理层
  *
+ * 使用缓存避免每次请求重建 22+ 个工具实例。
+ * 缓存按 (sessionId, locale, allowedTools, embeddingEnabled) 键区分，TTL 60s。
+ *
  * @param context 工具上下文
  * @param allowedTools 工具名称白名单（为空或 undefined 时返回全部工具）
  */
 export function getAllTools(context: ToolContext, allowedTools?: string[]): AgentTool<any>[] {
+  const embeddingEnabled = isEmbeddingEnabled()
+  const cacheKey = buildToolCacheKey(context.sessionId, context.locale, allowedTools, embeddingEnabled)
+
+  const cached = toolCache.get(cacheKey)
+  if (cached && Date.now() - cached.createdAt < TOOL_CACHE_TTL) {
+    // 缓存命中，但需要用当前 context 重新包装预处理层（context 含 preprocessConfig 等动态值）
+    return cached.tools.map((t) => wrapWithPreprocessing(t, context))
+  }
+
   let tools: AgentTool<any>[] = coreFactories.map((f) => f(context))
 
-  if (isEmbeddingEnabled()) {
+  if (embeddingEnabled) {
     tools.push(createSemanticSearchMessages(context))
   }
 
@@ -226,7 +258,11 @@ export function getAllTools(context: ToolContext, allowedTools?: string[]): Agen
     tools = tools.filter((t) => allowedTools.includes(t.name))
   }
 
-  return tools.map(translateTool).map((t) => wrapWithPreprocessing(t, context))
+  // 翻译后缓存（翻译结果只依赖 locale，不需要每次重做）
+  const translated = tools.map(translateTool)
+  toolCache.set(cacheKey, { tools: translated, createdAt: Date.now() })
+
+  return translated.map((t) => wrapWithPreprocessing(t, context))
 }
 
 /**

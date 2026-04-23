@@ -35,3 +35,11 @@ yarn.lock
 !.vscode/snippets.code-snippets
 .docs
 
+# Local development scratch
+.claude/
+tmp/
+nul
+*-fail.png
+*-this-session-is-being-continued-from-a-previous-c.txt
+test-results/
+playwright-report/
