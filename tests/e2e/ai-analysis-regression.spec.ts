@@ -363,6 +363,15 @@ test.describe('AI 分析回归测试', () => {
    * 超时：3 分钟（185 条消息约 6-7 个批次 × 每批 LLM ~10s ≈ 1-2 分钟）
    */
   test('AI-REG-008: 真实 LLM smoke：拿一个有消息的 session 分析后能查到至少一类提取结果', async () => {
+    // 仅在显式 opt-in 时跑——这个用例消耗真实 LLM 配额（数分钟），且写入用户真实
+    // 数据库（forceRerun=true 触发全量提取）。不适合放进自动化常规回归。
+    // 手动跑：CHATLAB_E2E_USE_SYSTEM=1 pnpm test:e2e:ai-regression
+    if (!useSystem) {
+      console.log('[AI-REG-008] SKIP: 未开启 CHATLAB_E2E_USE_SYSTEM=1（仅手动 opt-in）')
+      test.skip()
+      return
+    }
+
     // 8 分钟：185 条消息按 batchSize=30/overlap=5 分约 7 批，每批 LLM 流式可能 30s-2min。
     // 这个测试不强求 done，能跑到 50%+ 就算管道正常；提取结果在批次保存阶段就开始入库。
     test.setTimeout(480_000)
