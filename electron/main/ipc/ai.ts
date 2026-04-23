@@ -627,6 +627,15 @@ export function registerAIHandlers({ win }: IpcContext): void {
     }
   })
 
+  ipcMain.handle('assistant:getAllBuiltinToolCatalog', async () => {
+    try {
+      return assistantManager.getAllBuiltinToolCatalog()
+    } catch (error) {
+      console.error('Failed to get builtin tool catalog:', error)
+      return []
+    }
+  })
+
   ipcMain.handle('assistant:getBuiltinCatalog', async () => {
     try {
       return assistantManager.getBuiltinCatalog()

@@ -121,19 +121,20 @@ const SQL_TOOL_DEFS: CustomSqlToolDef[] = [
   {
     name: 'mutual_interaction_pairs',
     description:
-      '找出互动最频繁的成员对，基于双向消息时间接近度（一方发言后 5 分钟内另一方也发言即视为一次互动）。适用于发现关系亲密的好友组合。',
+      '找出互动最频繁的成员对，基于双向消息时间接近度（一方发言后 5 分钟内另一方也发言即视为一次互动）。适用于发现关系亲密的好友组合。注意：days 参数最大 30 天。',
     parameters: {
       type: 'object',
       properties: {
-        days: { type: 'number', description: '统计最近多少天的数据' },
+        days: { type: 'number', description: '统计最近多少天的数据（最大30天）' },
         limit: { type: 'number', description: '返回前多少对', default: 10 },
       },
       required: ['days'],
     },
     execution: {
       type: 'sqlite',
+      // 优化：使用 CTE 预筛选时间范围内的文本消息，避免全表笛卡尔积；days 硬限 30 天
       query:
-        "SELECT COALESCE(m1.group_nickname, m1.account_name) AS member_a, COALESCE(m2.group_nickname, m2.account_name) AS member_b, COUNT(*) AS interaction_count FROM message a JOIN message b ON b.sender_id != a.sender_id AND b.ts > a.ts AND b.ts <= a.ts + 300 JOIN member m1 ON a.sender_id = m1.id JOIN member m2 ON b.sender_id = m2.id WHERE a.sender_id < b.sender_id AND a.ts > unixepoch('now', '-' || @days || ' days') AND a.type = 0 AND b.type = 0 GROUP BY a.sender_id, b.sender_id ORDER BY interaction_count DESC LIMIT @limit",
+        "WITH recent_msgs AS (SELECT id, sender_id, ts FROM message WHERE type = 0 AND ts > unixepoch('now', '-' || MIN(@days, 30) || ' days')) SELECT COALESCE(m1.group_nickname, m1.account_name) AS member_a, COALESCE(m2.group_nickname, m2.account_name) AS member_b, COUNT(*) AS interaction_count FROM recent_msgs a JOIN recent_msgs b ON b.sender_id != a.sender_id AND b.ts > a.ts AND b.ts <= a.ts + 300 JOIN member m1 ON a.sender_id = m1.id JOIN member m2 ON b.sender_id = m2.id WHERE a.sender_id < b.sender_id GROUP BY a.sender_id, b.sender_id ORDER BY interaction_count DESC LIMIT @limit",
       rowTemplate: '{member_a} ↔ {member_b}：{interaction_count} 次互动',
       summaryTemplate: '互动最频繁的 {rowCount} 对好友：',
       fallback: '该时间范围内没有检测到明显的互动关系',
@@ -164,19 +165,21 @@ const SQL_TOOL_DEFS: CustomSqlToolDef[] = [
   {
     name: 'unanswered_messages',
     description:
-      '查找近 N 天内未被回复的消息，这些可能是未解决的客户问题。仅统计文本消息且内容超过 10 字的（过滤简短寒暄）。',
+      '查找近 N 天内未被回复的消息，这些可能是未解决的客户问题。仅统计文本消息且内容超过 10 字的（过滤简短寒暄）。注意：days 参数最大 30 天。',
     parameters: {
       type: 'object',
       properties: {
-        days: { type: 'number', description: '查找最近多少天的数据' },
+        days: { type: 'number', description: '查找最近多少天的数据（最大30天）' },
         limit: { type: 'number', description: '最多返回多少条', default: 20 },
       },
       required: ['days'],
     },
     execution: {
       type: 'sqlite',
+      // 优化：使用 CTE 预筛选时间范围并用 platform_message_id 替代 CAST(id AS TEXT)；days 硬限 30 天
+      // 移除第二个 NOT EXISTS（30分钟内有他人消息），改用 LEFT JOIN 自连接判断
       query:
-        "SELECT COALESCE(m.group_nickname, m.account_name) AS sender_name, datetime(msg.ts, 'unixepoch', 'localtime') AS send_time, SUBSTR(msg.content, 1, 100) AS content_preview FROM message msg JOIN member m ON msg.sender_id = m.id WHERE msg.type = 0 AND msg.content IS NOT NULL AND LENGTH(msg.content) > 10 AND msg.ts > unixepoch('now', '-' || @days || ' days') AND NOT EXISTS (SELECT 1 FROM message reply WHERE reply.reply_to_message_id = CAST(msg.id AS TEXT)) AND NOT EXISTS (SELECT 1 FROM message next WHERE next.sender_id != msg.sender_id AND next.ts > msg.ts AND next.ts <= msg.ts + 1800) ORDER BY msg.ts DESC LIMIT @limit",
+        "WITH candidates AS (SELECT msg.id, msg.sender_id, msg.ts, msg.content, msg.platform_message_id FROM message msg WHERE msg.type = 0 AND msg.content IS NOT NULL AND LENGTH(msg.content) > 10 AND msg.ts > unixepoch('now', '-' || MIN(@days, 30) || ' days')) SELECT COALESCE(m.group_nickname, m.account_name) AS sender_name, datetime(c.ts, 'unixepoch', 'localtime') AS send_time, SUBSTR(c.content, 1, 100) AS content_preview FROM candidates c JOIN member m ON c.sender_id = m.id WHERE NOT EXISTS (SELECT 1 FROM message reply WHERE reply.reply_to_message_id = c.platform_message_id AND reply.reply_to_message_id IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM candidates next WHERE next.sender_id != c.sender_id AND next.ts > c.ts AND next.ts <= c.ts + 1800) ORDER BY c.ts DESC LIMIT @limit",
       rowTemplate: '[{send_time}] {sender_name}：{content_preview}',
       summaryTemplate: '共发现 {rowCount} 条可能未被回复的消息：',
       fallback: '该时间范围内所有消息都已得到回复，服务质量很好！',

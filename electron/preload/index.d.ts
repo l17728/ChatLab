@@ -727,6 +727,7 @@ interface AssistantApi {
   reset: (id: string) => Promise<{ success: boolean; error?: string }>
   getBuiltinCatalog: () => Promise<BuiltinAssistantInfo[]>
   getBuiltinTsToolNames: () => Promise<string[]>
+  getAllBuiltinToolCatalog: () => Promise<Array<{ name: string; description: string }>>
   importAssistant: (builtinId: string) => Promise<{ success: boolean; error?: string }>
   reimportAssistant: (id: string) => Promise<{ success: boolean; error?: string }>
   importFromMd: (rawMd: string) => Promise<{ success: boolean; id?: string; error?: string }>

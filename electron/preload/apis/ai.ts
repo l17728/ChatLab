@@ -745,6 +745,14 @@ export const assistantApi = {
     return ipcRenderer.invoke('assistant:getBuiltinTsToolNames')
   },
 
+  /**
+   * 获取所有内置工具的目录（名称 + 描述），供前端在 Assistant 配置弹窗
+   * 等场景做工具勾选 / 分组展示。
+   */
+  getAllBuiltinToolCatalog: (): Promise<Array<{ name: string; description: string }>> => {
+    return ipcRenderer.invoke('assistant:getAllBuiltinToolCatalog')
+  },
+
   importAssistant: (builtinId: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('assistant:import', builtinId)
   },
