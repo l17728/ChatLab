@@ -18,10 +18,18 @@ pnpm format               # Prettier over entire project
 pnpm type-check:all       # Type-check both main and renderer
 pnpm type-check:node      # Type-check main/preload only
 pnpm type-check:web       # Type-check renderer only
-pnpm test:agent-context   # Single Node.js test file
-pnpm test:e2e             # Playwright E2E tests
-pnpm test:e2e:ui          # Playwright with UI mode
-pnpm test:e2e:headed      # Playwright non-headless
+
+# 测试
+pnpm test:unit                  # Node native test: formatError + preflightReason (pure fns)
+pnpm test:e2e                   # Playwright, all specs
+pnpm test:e2e:ui                # Playwright UI mode
+pnpm test:e2e:headed            # Non-headless
+pnpm test:e2e:regression        # webui-sessions + ui-consistency + ai-analysis specs (96 cases)
+pnpm test:e2e:ai-regression     # Only AI analysis regression suite (9 cases)
+pnpm test:regression            # = test:unit + test:e2e:regression（主回归入口）
+
+# AI smoke（opt-in，消耗真实 LLM 配额 + 写用户 DB，仅手动运行）
+CHATLAB_E2E_USE_SYSTEM=1 pnpm test:e2e:ai-regression
 ```
 
 ## Architecture
@@ -59,6 +67,25 @@ All SQLite work runs in a single Node.js `Worker` (`electron/main/worker/dbWorke
 - `rag/` — RAG pipeline: chunking, embedding, SQLite vector store, semantic search
 - `skills/` — Skill definitions + parser
 - `summary/` — Session summarization
+- `llm/preflight.ts` — `testLLMConnection()` 最小化 completeSimple 请求做连通性检测；AI 分析启动前强制预检，手动"测试连接"按钮也复用同一函数
+- `llm/preflightReason.ts` — phase→reason 映射 (pure fn)，供前端 toast 分支显示
+- `llm/formatError.ts` — pi-ai 错误对象转用户友好文案（429/503/quota/鉴权等）
+- `analysisLog.ts` — `logAnalysis(level, msg, data)` 双通道日志（console + userData/logs/ai/ai_*.log），所有 AI 分析关键节点走这个
+- `logger.ts` — `aiLogger.{info|warn|error}(category, msg, data)`，文件日志底座
+
+### AI 分析流水线 (`electron/main/services/extractionRunner.ts`)
+
+5 个 start*Extraction 函数（`startUnifiedExtraction` / startTask/Graph/Faq/Focus）统一走 `preflightAndStart(job, win, sessionId, jobType)` helper：
+
+1. 若 job 已在 running，静默跳过（活跃互斥）
+2. `startJob()` 置 running，发 progress=2 "正在检测 LLM 连通性..."
+3. `testLLMConnection({ timeoutMs: 8000 })` 真实 HTTP 预检
+4. 失败 → `failJob(reason)` + `win.send('collab:extractionError', { reason, error })`，**不留 pending job**
+5. 成功 → 继续批次流水线
+
+失败 reason 集合：`LLM_NOT_CONFIGURED` / `LLM_CONFIG_INVALID` / `LLM_UNREACHABLE` / `NO_MESSAGES` / 具体错误码。前端 `src/composables/useExtractionErrorToast.ts` 在 App.vue 顶层全局订阅，按 reason 弹对应 toast（LLM_NOT_CONFIGURED 带跳转设置按钮）。
+
+增量 vs 全量：`forceRerun=false` 默认增量（只处理 id > lastAnalyzedMessageId 的新消息），`forceRerun=true` 强制全量。保存阶段 dedup 兜底：Tasks/Todos/Focus 走 `findIdByNormalizedTitle` + 表达式索引 `idx_*_norm_title`（`LOWER(TRIM(title))`）；FAQ/Knowledge 先 Set 精确命中，回退到 Levenshtein；Graph 走 `upsertNode/Edge` 的 UNIQUE(type, name) 约束。
 
 ### Chat Parsers (`electron/main/parser/`)
 
