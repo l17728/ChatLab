@@ -324,11 +324,49 @@ async function triggerUnifiedAnalysis() {
     analysisStatus.value = { ...analysisStatus.value, hasNewMessages: false, newMessageCount: 0 }
   }
   try {
-    // forceRerun=false：主进程会根据 lastAnalyzedMessageId 自动走增量路径
-    // 不 setTimeout 复位，等待 collab:extractionDone 事件
-    // 传入主昵称用于 todos 语义过滤（只提取 @我/点名我的无时间请求）
-    // Vue reactive Proxy 无法通过 Electron IPC structured clone，必须先转普通数组
-    const nicks = JSON.parse(JSON.stringify(settingsStore.identityConfig.globalNicknames ?? []))
+    // 关键修：从本会话的"我是谁"(sessions.ownerId 指向某个 member.platformId) 反查
+    // 成员的 accountName / groupNickname / aliases，合并成 nicknames 列表给 LLM。
+    //
+    // 历史 bug：之前只读 settingsStore.identityConfig.globalNicknames——那是 app 级
+    // 全局昵称（FirstLaunchIdentityModal 写入的），与用户在「成员」页选的本会话身份
+    // 完全独立。结果用户在群里选了"小明"是我，但分析时 LLM 收到的是全局设的"张三"，
+    // 导致所有 @我/点名我的待办都识别失败。
+    const ownerId = sessionStore.currentSession?.ownerId
+    const members: any[] = await window.chatApi.getMembers(currentSessionId.value).catch((err: any) => {
+      console.warn('[GroupChat] getMembers failed when deriving nicknames:', err)
+      return []
+    })
+    const me = members.find((m) => m.platformId === ownerId)
+
+    const nicknameSet = new Set<string>()
+    if (me) {
+      const accountName = typeof me.accountName === 'string' ? me.accountName.trim() : ''
+      const groupNickname = typeof me.groupNickname === 'string' ? me.groupNickname.trim() : ''
+      if (accountName) nicknameSet.add(accountName)
+      if (groupNickname) nicknameSet.add(groupNickname)
+      // aliases 在 IPC 边界已 parse 为 string[]
+      const aliases = Array.isArray(me.aliases) ? me.aliases : []
+      for (const alias of aliases) {
+        if (typeof alias === 'string' && alias.trim()) nicknameSet.add(alias.trim())
+      }
+    }
+    // 兜底：member 找不到（DB 异常 / IPC 失败）时退回到全局 nicknames，
+    // 至少不让 todos 提取空跑
+    if (nicknameSet.size === 0) {
+      const globalNicks = settingsStore.identityConfig.globalNicknames ?? []
+      for (const n of globalNicks) {
+        if (typeof n === 'string' && n.trim()) nicknameSet.add(n.trim())
+      }
+    }
+
+    const nicks = Array.from(nicknameSet)
+    console.log(
+      `[GroupChat] AI analysis nicknames derived from ownerId=${ownerId}:`,
+      nicks,
+      `(member found=${!!me}, fallback=${!me && nicks.length > 0})`
+    )
+
+    // forceRerun=false：主进程根据 lastAnalyzedMessageId 自动走增量路径
     await window.collabApi?.createExtractionJob(currentSessionId.value, 'all', false, nicks)
   } catch (err) {
     console.error('[GroupChat] triggerUnifiedAnalysis failed:', err)
