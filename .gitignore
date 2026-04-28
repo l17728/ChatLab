@@ -25,6 +25,10 @@ src/auto-imports.d.ts
 src/components.d.ts
 *.tsbuildinfo
 
+# scripts/check-asar-coverage.py 工件（每次 build 后重新生成）
+/asar_list.txt
+/prod_tree.json
+
 # 使用npm作为包管理器
 yarn.lock
 
