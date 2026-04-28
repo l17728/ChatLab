@@ -34,7 +34,12 @@
     "errorBatchesNoToolCall": "AI 分析失敗：モデルが function calling をサポートしていません",
     "errorBatchesNoToolCallDesc": "現在のモデルは構造化ツール呼び出しを返しませんでした。Claude / GPT-4 / Gemini / Qwen-Max など、function calling をサポートするモデルに切り替えてください。",
     "errorBatchesFailed": "AI 分析失敗：すべてのバッチでエラー",
-    "errorBatchesFailedDesc": "すべての抽出バッチが失敗しました。詳細は AI ログをご確認ください（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）。"
+    "errorBatchesFailedDesc": "すべての抽出バッチが失敗しました。詳細は AI ログをご確認ください（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）。",
+    "doneSuccess": "AI 分析完了",
+    "doneNothingFound": "分析完了：抽出可能な内容が見つかりません",
+    "doneNothingFoundDesc": "この会話からタスク/ToDo/関心事項などの構造化情報は検出されませんでした。雑談中心の会話の可能性があり、正常な動作です。",
+    "doneWithPartialFailure": "分析完了（一部バッチ失敗）",
+    "doneWithPartialFailureDesc": "{failed}/{total} バッチがタイムアウトまたは失敗。保存済み：{summary}"
   },
   "reset": "リセット",
   "error": {

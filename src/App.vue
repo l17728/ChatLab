@@ -10,12 +10,14 @@ import { ChatRecordDrawer } from '@/components/common/ChatRecord'
 import GlobalTaskBar from '@/components/AIChat/GlobalTaskBar.vue'
 import IdentityToast from '@/components/identity/IdentityToast.vue'
 import FirstLaunchIdentityModal from '@/components/identity/FirstLaunchIdentityModal.vue'
+import AnalysisProgressIndicator from '@/components/analysis/AnalysisProgressIndicator.vue'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { useSettingsStore } from '@/stores/settings'
 import { useLLMStore } from '@/stores/llm'
 import { initializeWebUI, isBrowserEnvironment } from '@/composables/useEnvironment'
 import { useExtractionErrorToast } from '@/composables/useExtractionErrorToast'
+import { useAnalysisProgressSetup } from '@/composables/useAnalysisProgress'
 
 const { t } = useI18n()
 
@@ -35,8 +37,13 @@ const tooltip = {
 
 // AI 分析错误全局 toast：任何 Tab / Page 触发的分析失败都会弹提示。
 // 内部会按 data.reason 分发（LLM_NOT_CONFIGURED / LLM_CONFIG_INVALID /
-// LLM_UNREACHABLE / NO_MESSAGES），前两者附"跳转设置"按钮。
+// LLM_UNREACHABLE / NO_MESSAGES / BATCHES_*），前两者附"跳转设置"按钮。
 useExtractionErrorToast()
+
+// 全局 AI 分析进度订阅：装 IPC 监听器，把 progress 推到 module-level shared state，
+// <AnalysisProgressIndicator /> 组件读 state 渲染右下角悬浮卡。
+// 完成时也会 toast 成功 / 部分失败 / 无数据的反馈。
+useAnalysisProgressSetup()
 
 // 浏览器环境 = Web UI 模式，不需要等待 Electron IPC 初始化
 const isWebUI = isBrowserEnvironment()
@@ -168,6 +175,8 @@ onMounted(async () => {
     <IdentityToast />
     <!-- 首次启动身份弹窗（Layer 1：桌面端首次运行强制收集主昵称） -->
     <FirstLaunchIdentityModal v-if="!isWebUI" v-model:open="showFirstLaunchIdentity" />
+    <!-- 全局 AI 分析进度指示器：分析中常驻右下角，所有 tab/page 可见 -->
+    <AnalysisProgressIndicator />
   </UApp>
 </template>
 

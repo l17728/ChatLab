@@ -2063,6 +2063,9 @@ export async function startUnifiedExtraction(
       `完成：${savedTasks} 任务 / ${savedTodos} 待办 / ${savedFocus} 关注点 / ${savedFaqs} 问答 / ${savedConcepts + savedDocuments + savedProcedures + savedTips} 知识 / ${savedNodes} 实体`
     )
 
+    // 给前端补一个 batchSummary 字段：让全局进度组件能区分"100% 成功"和"部分批次失败但有数据"，
+    // 后者会在完成时 toast warning 而不是 success。
+    const partialFailureCount = totalBatches - batchCounts.ok
     win.webContents.send('collab:extractionDone', {
       jobId: job.id,
       sessionId,
@@ -2078,6 +2081,14 @@ export async function startUnifiedExtraction(
         tipsExtracted: savedTips,
         nodesExtracted: savedNodes,
         edgesExtracted: savedEdges,
+      },
+      batchSummary: {
+        total: totalBatches,
+        ok: batchCounts.ok,
+        aborted: batchCounts.aborted,
+        error: batchCounts.error,
+        noToolCall: batchCounts.no_tool_call,
+        partialFailure: partialFailureCount > 0 && batchCounts.ok > 0,
       },
     })
 

@@ -34,7 +34,12 @@
     "errorBatchesNoToolCall": "AI 分析失败：模型不支持 function calling",
     "errorBatchesNoToolCallDesc": "当前模型未返回结构化工具调用，无法用于提取。请改用支持 function calling 的模型，例如 Claude / GPT-4 / Gemini / Qwen-Max。",
     "errorBatchesFailed": "AI 分析失败：所有批次均出错",
-    "errorBatchesFailedDesc": "全部分析批次都没成功完成。请查看 ChatLab 的 AI 日志（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）了解详情。"
+    "errorBatchesFailedDesc": "全部分析批次都没成功完成。请查看 ChatLab 的 AI 日志（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）了解详情。",
+    "doneSuccess": "AI 分析完成",
+    "doneNothingFound": "分析完成：未发现可提取的内容",
+    "doneNothingFoundDesc": "聊天记录里没有识别到任务/待办/关注点等结构化信息，可能是闲聊型对话，属正常情况。",
+    "doneWithPartialFailure": "分析完成（部分批次失败）",
+    "doneWithPartialFailureDesc": "{failed}/{total} 批次超时或失败，已保存：{summary}"
   },
   "reset": "重置",
   "error": {

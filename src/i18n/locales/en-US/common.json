@@ -34,7 +34,12 @@
     "errorBatchesNoToolCall": "AI analysis failed: model does not support function calling",
     "errorBatchesNoToolCallDesc": "The current model did not return a structured tool call, which is required for extraction. Switch to a model that supports function calling, e.g., Claude / GPT-4 / Gemini / Qwen-Max.",
     "errorBatchesFailed": "AI analysis failed: all batches errored",
-    "errorBatchesFailedDesc": "All extraction batches failed. Check the AI log at %APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log for details."
+    "errorBatchesFailedDesc": "All extraction batches failed. Check the AI log at %APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log for details.",
+    "doneSuccess": "AI analysis complete",
+    "doneNothingFound": "Analysis complete: no extractable content found",
+    "doneNothingFoundDesc": "No tasks/todos/focus items recognized in this chat. Likely casual conversation — this is normal.",
+    "doneWithPartialFailure": "Analysis complete (with partial failures)",
+    "doneWithPartialFailureDesc": "{failed}/{total} batches timed out or errored. Saved: {summary}"
   },
   "reset": "Reset",
   "error": {
