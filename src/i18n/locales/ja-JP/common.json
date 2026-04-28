@@ -28,7 +28,13 @@
     "errorLLMConfigInvalid": "AI 分析の起動に失敗：LLM 設定が無効です",
     "errorLLMUnreachable": "AI 分析の起動に失敗：LLM に接続できません",
     "errorNoMessages": "AI 分析を中止：このセッションには分析可能なメッセージがありません",
-    "errorNoMessagesDesc": "メッセージのインポートが正常に完了しているか確認するか、このセッションを再インポートしてください。"
+    "errorNoMessagesDesc": "メッセージのインポートが正常に完了しているか確認するか、このセッションを再インポートしてください。",
+    "errorBatchesTimedOut": "AI 分析失敗：LLM の応答が遅すぎます",
+    "errorBatchesTimedOutDesc": "設定されたモデルが 180 秒以内にどのバッチも完了しませんでした。「設定 → AI モデル設定」でより速いモデル（Claude Sonnet / GPT-4o-mini / Gemini Flash 等）に切り替えるか、ネットワークを確認してください。",
+    "errorBatchesNoToolCall": "AI 分析失敗：モデルが function calling をサポートしていません",
+    "errorBatchesNoToolCallDesc": "現在のモデルは構造化ツール呼び出しを返しませんでした。Claude / GPT-4 / Gemini / Qwen-Max など、function calling をサポートするモデルに切り替えてください。",
+    "errorBatchesFailed": "AI 分析失敗：すべてのバッチでエラー",
+    "errorBatchesFailedDesc": "すべての抽出バッチが失敗しました。詳細は AI ログをご確認ください（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）。"
   },
   "reset": "リセット",
   "error": {

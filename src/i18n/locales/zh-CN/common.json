@@ -28,7 +28,13 @@
     "errorLLMConfigInvalid": "AI 分析启动失败：LLM 配置无效",
     "errorLLMUnreachable": "AI 分析启动失败：LLM 无法访问",
     "errorNoMessages": "AI 分析中止：该会话没有可分析的消息",
-    "errorNoMessagesDesc": "请检查消息导入是否真正完成，或尝试重新导入该会话。"
+    "errorNoMessagesDesc": "请检查消息导入是否真正完成，或尝试重新导入该会话。",
+    "errorBatchesTimedOut": "AI 分析失败：LLM 响应过慢",
+    "errorBatchesTimedOutDesc": "所配置的模型在 180 秒内未完成任何一批分析。建议在「设置 → AI 模型配置」中改用更快的模型（如 Claude Sonnet / GPT-4o-mini / Gemini Flash），或检查网络。",
+    "errorBatchesNoToolCall": "AI 分析失败：模型不支持 function calling",
+    "errorBatchesNoToolCallDesc": "当前模型未返回结构化工具调用，无法用于提取。请改用支持 function calling 的模型，例如 Claude / GPT-4 / Gemini / Qwen-Max。",
+    "errorBatchesFailed": "AI 分析失败：所有批次均出错",
+    "errorBatchesFailedDesc": "全部分析批次都没成功完成。请查看 ChatLab 的 AI 日志（%APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log）了解详情。"
   },
   "reset": "重置",
   "error": {

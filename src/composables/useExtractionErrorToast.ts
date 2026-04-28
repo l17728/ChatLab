@@ -58,6 +58,33 @@ export function useExtractionErrorToast(): void {
       title = t('analysis.errorNoMessages')
       description = t('analysis.errorNoMessagesDesc')
       color = 'warning'
+    } else if (reason === 'BATCHES_TIMED_OUT') {
+      // LLM 太慢，180s 还没出完整批次结果。引导用户换更快的模型。
+      title = t('analysis.errorBatchesTimedOut')
+      description = rawError || t('analysis.errorBatchesTimedOutDesc')
+      color = 'warning'
+      actions = [
+        {
+          label: t('layout.footer.settings'),
+          onClick: () => router.push({ name: 'settings' }),
+          color: 'primary',
+        },
+      ]
+    } else if (reason === 'BATCHES_NO_TOOL_CALL') {
+      // 模型不支持 function calling。Toast 文案明确指导换 Claude/GPT-4 等。
+      title = t('analysis.errorBatchesNoToolCall')
+      description = rawError || t('analysis.errorBatchesNoToolCallDesc')
+      actions = [
+        {
+          label: t('layout.footer.settings'),
+          onClick: () => router.push({ name: 'settings' }),
+          color: 'primary',
+        },
+      ]
+    } else if (reason === 'BATCHES_FAILED') {
+      // 网络/鉴权/provider 内部错。无明确指导，把后端 errorMessage 直接展示给用户排错。
+      title = t('analysis.errorBatchesFailed')
+      description = rawError || t('analysis.errorBatchesFailedDesc')
     }
 
     toast.add({

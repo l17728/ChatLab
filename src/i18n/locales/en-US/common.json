@@ -28,7 +28,13 @@
     "errorLLMConfigInvalid": "AI analysis failed to start: LLM configuration invalid",
     "errorLLMUnreachable": "AI analysis failed to start: LLM unreachable",
     "errorNoMessages": "AI analysis aborted: this session has no messages to analyze",
-    "errorNoMessagesDesc": "Please verify that the message import finished successfully, or try re-importing this session."
+    "errorNoMessagesDesc": "Please verify that the message import finished successfully, or try re-importing this session.",
+    "errorBatchesTimedOut": "AI analysis failed: LLM response too slow",
+    "errorBatchesTimedOutDesc": "The configured model did not finish any batch within 180 seconds. Switch to a faster model (e.g., Claude Sonnet / GPT-4o-mini / Gemini Flash) in Settings → AI Model Config, or check your network.",
+    "errorBatchesNoToolCall": "AI analysis failed: model does not support function calling",
+    "errorBatchesNoToolCallDesc": "The current model did not return a structured tool call, which is required for extraction. Switch to a model that supports function calling, e.g., Claude / GPT-4 / Gemini / Qwen-Max.",
+    "errorBatchesFailed": "AI analysis failed: all batches errored",
+    "errorBatchesFailedDesc": "All extraction batches failed. Check the AI log at %APPDATA%\\ChatLab\\data\\logs\\ai\\ai_*.log for details."
   },
   "reset": "Reset",
   "error": {

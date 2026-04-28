@@ -544,6 +544,10 @@ type ExtractionErrorReason =
   | 'GRAPH_EXTRACTION_ERROR'
   | 'FAQ_EXTRACTION_ERROR'
   | 'FOCUS_EXTRACTION_ERROR'
+  // v0.17.6: 全失败检测引入的三个新 reason
+  | 'BATCHES_TIMED_OUT' // 大多数批次超时（>180s/批）→ provider 太慢
+  | 'BATCHES_NO_TOOL_CALL' // 大多数批次没返回 tool call → 模型不支持 function calling
+  | 'BATCHES_FAILED' // 大多数批次因其他错误失败（网络/鉴权/provider 内部错）
 
 /**
  * 开始一个提取任务的前置准备：
@@ -1278,6 +1282,24 @@ function sendGraphProgress(
 type BatchProgressCallback = (info: { textTokens: number; toolTokens: number }) => void
 
 /**
+ * 单批 LLM 调用的执行状态。外层循环根据这些状态做"全失败检测 + failJob"，
+ * 否则会出现"每批都失败但 job 仍标记成功、UI 显示 0 数据"的隐藏 bug。
+ *
+ * - ok: 正常拿到 tool call 或可降级解析的 text，不论实际提取了多少条
+ * - aborted: 120/180s 超时（AbortController fire）—— 通常是 provider 太慢
+ * - error: stream 抛错 / 网络 / 鉴权 / provider 内部错误
+ * - no_tool_call: provider 既没返 tool call 也没返 text，无法解析
+ * - no_config: 没有激活的 LLM 配置（preflight 应该已拦住，这里是兜底）
+ */
+type BatchStatus = 'ok' | 'aborted' | 'error' | 'no_tool_call' | 'no_config'
+
+interface BatchOutcome {
+  result: UnifiedExtractionResult
+  status: BatchStatus
+  errorMessage?: string
+}
+
+/**
  * 一次 LLM 调用同时输出 tasks / todos / focus / faqs / graph。
  *
  * 工作方式（长期最优方案）：
@@ -1291,7 +1313,7 @@ async function extractAllWithLLM(
   messages: ChatMessage[],
   onProgress?: BatchProgressCallback,
   globalNicknames: string[] = []
-): Promise<UnifiedExtractionResult> {
+): Promise<BatchOutcome> {
   const empty: UnifiedExtractionResult = {
     tasks: [],
     todos: [],
@@ -1305,11 +1327,10 @@ async function extractAllWithLLM(
   }
   const config = getActiveConfig()
   if (!config) {
-    logAnalysis(
-      'error',
+    const msg =
       'extractAllWithLLM: 没有激活的 LLM 配置，本批次返回空结果。请在"设置 → AI 模型配置"激活一个服务商。'
-    )
-    return empty
+    logAnalysis('error', msg)
+    return { result: empty, status: 'no_config', errorMessage: msg }
   }
 
   const model = buildPiModel(config)
@@ -1350,7 +1371,11 @@ ${todoRule}
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 120_000)
+  // 180s 超时（之前是 120s），给慢 provider（如 DeepSeek-R1、自部署 Qwen）多留缓冲。
+  // 配合 maxTokens 4000 + CORE_BATCH 20 的减负，单批输出量大约 50-70% 减少，
+  // 一起拉低 timeout 触发率。
+  const TIMEOUT_MS = 180_000
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
   try {
     console.log(`[ExtractionRunner] Unified LLM stream start, ${messages.length} messages`)
@@ -1362,7 +1387,9 @@ ${todoRule}
     const eventStream = piStream(model, context, {
       apiKey: config.apiKey,
       temperature: 0.1,
-      maxTokens: 8000,
+      // 4000 是经验值：30 条核心消息 × 约 10 类提取，正常输出 1500-3000 token，
+      // 4000 留 30% 余量。降下来主要是为了让慢 provider TTFT/TTLT 更可控。
+      maxTokens: 4000,
       signal: controller.signal,
       // 强制 provider 调用工具而不是自由回复，OpenAI-compat 端点普遍支持
       toolChoice: { type: 'function', function: { name: 'save_extracted_info' } },
@@ -1383,12 +1410,11 @@ ${todoRule}
         case 'thinking_delta':
           // 显式丢弃，不污染任何下游逻辑
           break
-        case 'error':
-          logAnalysis(
-            'error',
-            `LLM stream error (provider=${config.provider} model=${config.model}): ${evt.error.errorMessage || evt.reason}`
-          )
-          return empty
+        case 'error': {
+          const msg = `LLM stream error (provider=${config.provider} model=${config.model}): ${evt.error.errorMessage || evt.reason}`
+          logAnalysis('error', msg)
+          return { result: empty, status: 'error', errorMessage: msg }
+        }
       }
     }
 
@@ -1407,35 +1433,31 @@ ${todoRule}
         .join('')
         .trim()
       if (!fallbackText) {
-        logAnalysis(
-          'error',
-          `LLM 返回空：无 tool call 也无 text。检查 provider=${config.provider} model=${config.model} 是否支持 function-calling，apiKey 是否有效。`
-        )
-        return empty
+        const msg = `LLM 返回空：无 tool call 也无 text。检查 provider=${config.provider} model=${config.model} 是否支持 function-calling，apiKey 是否有效。`
+        logAnalysis('error', msg)
+        return { result: empty, status: 'no_tool_call', errorMessage: msg }
       }
       logAnalysis(
         'warn',
         `LLM 未调用工具（provider=${config.provider}），回退到 raw text JSON 解析。文本长度=${fallbackText.length}`
       )
-      return parseRawJsonFallback(fallbackText, empty)
+      // fallback 解析视作 ok（拿到了数据就算成功，即便 0 条也是合法 empty）
+      return { result: parseRawJsonFallback(fallbackText, empty), status: 'ok' }
     }
 
     const args = toolCall.arguments as Partial<UnifiedExtractionResult>
-    return sanitizeUnifiedResult(args, empty)
+    return { result: sanitizeUnifiedResult(args, empty), status: 'ok' }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
     if (controller.signal.aborted) {
-      logAnalysis(
-        'error',
-        `LLM 调用超时（>120s，provider=${config.provider} model=${config.model}），本批次放弃`
-      )
+      const msg = `LLM 调用超时（>${Math.floor(TIMEOUT_MS / 1000)}s，provider=${config.provider} model=${config.model}），本批次放弃`
+      logAnalysis('error', msg)
+      return { result: empty, status: 'aborted', errorMessage: msg }
     } else {
-      logAnalysis(
-        'error',
-        `LLM 调用异常（provider=${config.provider} model=${config.model} baseUrl=${config.baseUrl || '(默认)'}）: ${errMsg}`
-      )
+      const msg = `LLM 调用异常（provider=${config.provider} model=${config.model} baseUrl=${config.baseUrl || '(默认)'}）: ${errMsg}`
+      logAnalysis('error', msg)
+      return { result: empty, status: 'error', errorMessage: msg }
     }
-    return empty
   } finally {
     clearTimeout(timer)
   }
@@ -1617,10 +1639,22 @@ export async function startUnifiedExtraction(
       `${mode === 'incremental' ? '增量分析' : '全量分析'} · 共 ${messages.length} 条消息`
     )
 
-    const batchSize = 30
-    const overlap = 5
-    if (batchSize <= overlap)
-      throw new Error(`[ExtractionRunner] batchSize(${batchSize}) must be > overlap(${overlap})`)
+    // ========== 时间 overlap 批处理 ==========
+    // CORE 是本批"新"消息（不会和别的批重叠），步长固定 = CORE，进度单调递增。
+    // overlap 区段从 core 起点往前回溯：所有 timestamp 落在 (本批首条 - 2天) 内的旧消息
+    // 都会被前置进 batch 给 LLM 看，但只用于上下文，不计入"已分析"。
+    // 上限 MAX_OVERLAP_MSGS 防止活跃群被 2 天 overlap 撑爆 context；
+    // 下限 MIN_OVERLAP_FALLBACK 防止稀疏群（消息间隔 >2 天）完全没接缝。
+    //
+    // CORE_BATCH=20 (之前 30): 配合 maxTokens 4000 + timeout 180s 一起降低慢 provider 的失败率。
+    // 总分析时间约 +30%，但完成率显著提升 —— 拿到不完整数据比 0 数据好得多。
+    const CORE_BATCH = 20
+    const TIME_OVERLAP_MS = 2 * 24 * 3600 * 1000
+    const MAX_OVERLAP_MSGS = 100
+    const MIN_OVERLAP_FALLBACK = 5
+    // QQ 等部分平台 timestamp 为秒，统一归一到 ms 再做时间比较；
+    // 不能就地修改 messages，因为 firstMsgTs 等下游字段依赖原始 timestamp。
+    const tsMs = (t: number) => (t > 0 && t < 1e12 ? t * 1000 : t)
 
     const allTasks: ExtractedTask[] = []
     const allTodos: ExtractedTodo[] = []
@@ -1633,29 +1667,70 @@ export async function startUnifiedExtraction(
     const allEntities: ExtractedEntity[] = []
     const allRelationships: ExtractedRelationship[] = []
 
-    for (let i = 0; i < messages.length; i += batchSize - overlap) {
-      const end = Math.min(messages.length, i + batchSize)
-      const batch = messages.slice(i, end)
-      const batchLabel = `${i + 1}-${end}/${messages.length}`
+    // ========== 批次结果统计 ==========
+    // 修历史 bug：以前 extractAllWithLLM 失败也返回 empty，外层无法分辨"批次失败"和
+    // "批次成功但无内容"，导致每批都超时也会 finishJob('done')，UI 看到 0 数据但
+    // 没有任何错误提示。现在按 BatchOutcome.status 分类计数，循环结束后判定。
+    const batchCounts: Record<BatchStatus, number> = {
+      ok: 0,
+      aborted: 0,
+      error: 0,
+      no_tool_call: 0,
+      no_config: 0,
+    }
+    let totalBatches = 0
+    let lastErrorMessage: string | undefined
 
-      console.log(`[ExtractionRunner] Unified batch ${i}-${end} of ${messages.length}`)
+    for (let coreStart = 0; coreStart < messages.length; coreStart += CORE_BATCH) {
+      const coreEnd = Math.min(messages.length, coreStart + CORE_BATCH)
+
+      // 计算 overlap 起点：往前找所有 timestamp 在 2 天内的旧消息
+      let overlapStart = coreStart
+      if (coreStart > 0) {
+        const cutoffMs = tsMs(messages[coreStart].timestamp) - TIME_OVERLAP_MS
+        while (overlapStart > 0) {
+          if (coreStart - overlapStart >= MAX_OVERLAP_MSGS) break
+          if (tsMs(messages[overlapStart - 1].timestamp) < cutoffMs) break
+          overlapStart--
+        }
+        // 稀疏聊天兜底：消息间隔 > 2 天时，强制保留 5 条 overlap，
+        // 至少把上一批末尾的接缝缝合住
+        if (coreStart - overlapStart < MIN_OVERLAP_FALLBACK) {
+          overlapStart = Math.max(0, coreStart - MIN_OVERLAP_FALLBACK)
+        }
+      }
+
+      const batch = messages.slice(overlapStart, coreEnd)
+      const overlapCount = coreStart - overlapStart
+      const batchLabel = `${coreStart + 1}-${coreEnd}/${messages.length}`
+
+      console.log(
+        `[ExtractionRunner] Unified batch core=${coreStart}-${coreEnd} overlap=${overlapCount} (size=${batch.length})`
+      )
 
       // 节流 token 进度：每 500ms 最多推一次，避免刷爆 IPC
-      // 关键：token 回调和批次完成都用 `end / messages.length` 作为基准——批次结束位置
-      // 是单调递增的（即使滑窗重叠，end 也永远不回退），配合外层 ratchet 可彻底消除回退。
+      // 关键：进度基准用 coreEnd / messages.length（coreEnd 单步递增），
+      // 配合外层 ratchet 彻底消除回退。
       let lastPush = 0
-      const res = await extractAllWithLLM(
+      const outcome = await extractAllWithLLM(
         batch,
         ({ toolTokens }) => {
           const now = Date.now()
           if (now - lastPush < 500) return
           lastPush = now
-          const progress = Math.min(85, 10 + Math.floor((end / messages.length) * 75))
+          const progress = Math.min(85, 10 + Math.floor((coreEnd / messages.length) * 75))
           reportProgress(progress, `批次 ${batchLabel} · 生成中 ${toolTokens} 字符`)
         },
         globalNicknames
       )
 
+      totalBatches++
+      batchCounts[outcome.status]++
+      if (outcome.status !== 'ok' && outcome.errorMessage) {
+        lastErrorMessage = outcome.errorMessage
+      }
+
+      const res = outcome.result
       allTasks.push(...res.tasks)
       allTodos.push(...res.todos)
       allFocus.push(...res.focus)
@@ -1680,19 +1755,67 @@ export async function startUnifiedExtraction(
         res.graph.relationships.length
       logAnalysis(
         'info',
-        `Batch ${batchLabel} done: tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | batch total=${batchTotal}`
+        `Batch ${batchLabel} ${outcome.status} (overlap=${overlapCount}): tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | batch total=${batchTotal}`
       )
-      if (batchTotal === 0) {
+      if (batchTotal === 0 && outcome.status === 'ok') {
         logAnalysis(
           'warn',
-          `Batch ${batchLabel} returned 0 items. 可能原因：LLM 未返回 tool call / API 错误 / 消息内容无可提取信息`
+          `Batch ${batchLabel} ok but returned 0 items. 可能聊天内容确实没有可提取信息（小群闲聊）`
         )
       }
 
-      const progress = Math.min(85, 10 + Math.floor((end / messages.length) * 75))
+      const progress = Math.min(85, 10 + Math.floor((coreEnd / messages.length) * 75))
       reportProgress(
         progress,
-        `已分析 ${end}/${messages.length} 条消息 · 累计 tasks=${allTasks.length} todos=${allTodos.length} focus=${allFocus.length} faqs=${allFaqs.length}`
+        `已分析 ${coreEnd}/${messages.length} 条消息 · 累计 tasks=${allTasks.length} todos=${allTodos.length} focus=${allFocus.length} faqs=${allFaqs.length}`
+      )
+    }
+
+    // ========== 全失败检测 ==========
+    // 这是修复 v0.17.5 "分析完无数据"的核心：
+    // 如果一条 ok 都没有，绝对不能 finishJob('done')；必须 failJob + 发错误事件，
+    // 让前端 toast 告诉用户真实原因（超时/不支持 tool call / 配置失效）
+    logAnalysis(
+      'info',
+      `Batch outcome summary: total=${totalBatches} ok=${batchCounts.ok} aborted=${batchCounts.aborted} error=${batchCounts.error} no_tool_call=${batchCounts.no_tool_call} no_config=${batchCounts.no_config}`
+    )
+
+    if (totalBatches > 0 && batchCounts.ok === 0) {
+      // 选最有诊断价值的 reason：优先 no_config / no_tool_call（用户可改配置），
+      // 其次 aborted（提示模型太慢），最后 error（兜底）
+      let reason: ExtractionErrorReason
+      let userMsg: string
+      if (batchCounts.no_config > 0) {
+        reason = 'LLM_NOT_CONFIGURED'
+        userMsg = 'LLM 配置不可用，全部 ' + totalBatches + ' 个批次失败'
+      } else if (batchCounts.no_tool_call >= batchCounts.aborted) {
+        reason = 'BATCHES_NO_TOOL_CALL'
+        userMsg = `所配置的模型不支持 function calling（${batchCounts.no_tool_call}/${totalBatches} 批次），请改用 Claude / GPT-4 / Gemini / Qwen-Max 等支持 tool calling 的模型`
+      } else if (batchCounts.aborted >= batchCounts.error) {
+        reason = 'BATCHES_TIMED_OUT'
+        userMsg = `LLM 响应过慢，${batchCounts.aborted}/${totalBatches} 批次在 180 秒内未完成。建议换响应更快的模型或检查网络`
+      } else {
+        reason = 'BATCHES_FAILED'
+        userMsg = `全部 ${totalBatches} 批次失败：${lastErrorMessage || '未知原因'}`
+      }
+      logAnalysis('error', `All batches failed → failJob with reason=${reason}: ${userMsg}`)
+      extractionJobService.failJob(job.id, reason, userMsg)
+      win.webContents.send('collab:extractionError', {
+        jobId: job.id,
+        sessionId,
+        jobType: 'all',
+        reason,
+        error: userMsg,
+      })
+      return
+    }
+
+    // 部分批次失败但有 ok 的：日志 warn，仍然继续保存（已经拿到的数据还是有用的）
+    const failedCount = totalBatches - batchCounts.ok
+    if (failedCount > 0) {
+      logAnalysis(
+        'warn',
+        `Partial failure: ${failedCount}/${totalBatches} 批次失败但有 ${batchCounts.ok} 批成功，继续保存已提取的数据`
       )
     }
 
