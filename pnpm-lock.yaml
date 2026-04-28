@@ -59,6 +59,9 @@ importers:
       '@google/genai':
         specifier: ^1.50.1
         version: 1.50.1
+      '@keyv/serialize':
+        specifier: ^1.1.1
+        version: 1.1.1
       '@mariozechner/pi-agent-core':
         specifier: 0.54.2
         version: 0.54.2(ws@8.19.0)(zod@3.25.76)
@@ -74,6 +77,9 @@ importers:
       '@node-rs/jieba':
         specifier: ^2.0.1
         version: 2.0.1
+      '@sec-ant/readable-stream':
+        specifier: ^0.6.0
+        version: 0.6.0
       '@sinclair/typebox':
         specifier: ^0.34.49
         version: 0.34.49
@@ -245,6 +251,9 @@ importers:
       ip-address:
         specifier: ^10.1.1
         version: 10.1.1
+      is-stream:
+        specifier: ^4.0.1
+        version: 4.0.1
       json-buffer:
         specifier: ^3.0.1
         version: 3.0.1
@@ -347,6 +356,9 @@ importers:
       sumchecker:
         specifier: ^3.0.1
         version: 3.0.1
+      tagged-tag:
+        specifier: ^1.0.0
+        version: 1.0.0
       type-fest:
         specifier: ^5.6.0
         version: 5.6.0
@@ -1535,6 +1547,9 @@ packages:
 
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
+
+  '@sec-ant/readable-stream@0.6.0':
+    resolution: {integrity: sha512-uiBh8DrB5FN35gP6/o8JEhEQ7/ci1jUsOZO/VMUjyvTpjtV54VstOXVj1TvTj/wsT23pfX6butxxh3qufsW3+g==}
 
   '@sinclair/typebox@0.34.49':
     resolution: {integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==}
@@ -7226,6 +7241,8 @@ snapshots:
     optional: true
 
   '@sec-ant/readable-stream@0.4.1': {}
+
+  '@sec-ant/readable-stream@0.6.0': {}
 
   '@sinclair/typebox@0.34.49': {}
 
