@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, shallowRef } from 'vue'
+import { useExtractionRefresh } from '@/composables/useExtractionRefresh'
 import { storeToRefs } from 'pinia'
 import { useGraphStore } from '@/stores/graph'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
@@ -435,6 +436,12 @@ onMounted(async () => {
   document.addEventListener('fullscreenchange', fullscreenHandler)
   await Promise.all([graphStore.loadStats(), graphStore.loadGraph()])
   await initCytoscape()
+})
+
+// v0.17.9: AI 分析批次完成后增量刷新图谱（节点/边 upsert 后用户实时可见）。
+// graph 是全局视图（跨会话聚合），不按 sessionId 过滤。
+useExtractionRefresh(() => Promise.all([graphStore.loadStats(), graphStore.loadGraph()]), {
+  types: ['graph'],
 })
 
 onUnmounted(() => {

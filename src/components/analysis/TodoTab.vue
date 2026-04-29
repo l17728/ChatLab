@@ -12,6 +12,7 @@ import { useTodoStore } from '@/stores/todo'
 import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
+import { useExtractionRefresh } from '@/composables/useExtractionRefresh'
 
 const props = defineProps<{ sessionId?: string }>()
 
@@ -172,6 +173,9 @@ onMounted(async () => {
   // Layer 3: 首次使用身份确认检查（延迟 500ms 避免与页面渲染冲突）
   setTimeout(checkAndShowIdentityModal, 500)
 })
+
+// v0.17.9: AI 分析每批完成都刷新本 tab，让用户实时看到新待办进来
+useExtractionRefresh(loadTodos, { types: ['todos'] })
 
 // 状态颜色和标签
 const statusColors: Record<string, string> = {

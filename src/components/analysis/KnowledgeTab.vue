@@ -4,6 +4,7 @@ import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
+import { useExtractionRefresh } from '@/composables/useExtractionRefresh'
 
 const knowledgeStore = useKnowledgeStore()
 const { filteredItems, loading, statistics, categories, filter, viewStatus } = storeToRefs(knowledgeStore)
@@ -32,6 +33,13 @@ function onSearch() {
 onMounted(async () => {
   await Promise.all([knowledgeStore.loadItems(), knowledgeStore.loadCategories()])
 })
+
+// v0.17.9: AI 分析每批 concept/document/procedure/tip/faq 落库后实时刷新
+// 'faqs' 和 'knowledge' 都属于 knowledge_item 表，本 tab 都消费
+useExtractionRefresh(
+  () => Promise.all([knowledgeStore.loadItems(), knowledgeStore.loadCategories()]),
+  { types: ['faqs', 'knowledge'] }
+)
 
 async function markHelpful(itemId: number) {
   if (isBrowserEnvironment()) return

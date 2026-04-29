@@ -16,6 +16,7 @@ import { getActiveConfig, buildPiModel } from '../ai/llm'
 import { testLLMConnection } from '../ai/llm/preflight'
 import { phaseToReason } from '../ai/llm/preflightReason'
 import { logAnalysis } from '../ai/analysisLog'
+import { pickAllFailedReason } from './pickAllFailedReason'
 import {
   completeSimple,
   stream as piStream,
@@ -1526,17 +1527,8 @@ function parseRawJsonFallback(raw: string, empty: UnifiedExtractionResult): Unif
   }
 }
 
-function deduplicateTodos(todos: ExtractedTodo[]): ExtractedTodo[] {
-  const seen = new Map<string, ExtractedTodo>()
-  for (const t of todos) {
-    const key = t.title.toLowerCase().trim()
-    const existing = seen.get(key)
-    if (!existing || t.confidence > existing.confidence) {
-      seen.set(key, t)
-    }
-  }
-  return Array.from(seen.values())
-}
+// v0.17.9 起内存级 dedup 不再使用（per-batch save + DB 索引去重已覆盖），
+// deduplicateTodos / deduplicateFocusItems / deduplicateFAQs 等历史 helper 已删除。
 
 /**
  * 启动统一多类型提取（异步，不阻塞）
@@ -1656,18 +1648,7 @@ export async function startUnifiedExtraction(
     // 不能就地修改 messages，因为 firstMsgTs 等下游字段依赖原始 timestamp。
     const tsMs = (t: number) => (t > 0 && t < 1e12 ? t * 1000 : t)
 
-    const allTasks: ExtractedTask[] = []
-    const allTodos: ExtractedTodo[] = []
-    const allFocus: ExtractedFocusItem[] = []
-    const allFaqs: ExtractedFAQ[] = []
-    const allConcepts: ExtractedKnowledge[] = []
-    const allDocuments: ExtractedKnowledge[] = []
-    const allProcedures: ExtractedKnowledge[] = []
-    const allTips: ExtractedKnowledge[] = []
-    const allEntities: ExtractedEntity[] = []
-    const allRelationships: ExtractedRelationship[] = []
-
-    // ========== 批次结果统计 ==========
+    // ========== 批次结果统计 + 实时保存累计 ==========
     // 修历史 bug：以前 extractAllWithLLM 失败也返回 empty，外层无法分辨"批次失败"和
     // "批次成功但无内容"，导致每批都超时也会 finishJob('done')，UI 看到 0 数据但
     // 没有任何错误提示。现在按 BatchOutcome.status 分类计数，循环结束后判定。
@@ -1680,6 +1661,258 @@ export async function startUnifiedExtraction(
     }
     let totalBatches = 0
     let lastErrorMessage: string | undefined
+
+    // ========== 实时保存重构（v0.17.9）==========
+    // v0.17.8 之前：循环里只 push 到 allTasks 等内存数组，等所有批次跑完后统一 dedup +
+    // save。结果用户看着 indicator 跑了 10 分钟，UI 上一直 0 条，最后一瞬间冒出来全部数据。
+    //
+    // v0.17.9：每批 LLM 返回 ok 后立刻保存到 DB，并发 collab:extractionBatchDone 事件，
+    // 各 tab 监听后实时刷新自己的列表。跨批次去重靠两层：
+    //   a) Tasks/Todos/Focus 走 DB 索引 findIdByNormalizedTitle（O(log N) per lookup）
+    //   b) FAQ / Knowledge × 4 类用内存 Set 缓存（每类 query 一次再增量更新），
+    //      避免每批都 fullscan 一次现有库
+    // Graph 走 graphService.upsertNode/Edge 的 UNIQUE 约束。
+    let savedTasks = 0
+    let mergedTasks = 0
+    let savedTodos = 0
+    let skippedTodos = 0
+    let savedFocus = 0
+    let skippedFocus = 0
+    let savedFaqs = 0
+    let savedConcepts = 0
+    let savedDocuments = 0
+    let savedProcedures = 0
+    let savedTips = 0
+    let savedNodes = 0
+    let savedEdges = 0
+
+    // 跨批次 in-memory 去重缓存（一次 query DB，每批保存后追加新标题）
+    const existingFaqTitleSet = new Set<string>(
+      knowledgeService.queryItems({ type: ['faq'] }).map((f) => f.title.toLowerCase().trim())
+    )
+    const existingKnowledgeTitleSets: Record<'concept' | 'document' | 'procedure' | 'tip', Set<string>> = {
+      concept: new Set(knowledgeService.queryItems({ type: ['concept'] }).map((k) => k.title.toLowerCase().trim())),
+      document: new Set(knowledgeService.queryItems({ type: ['document'] }).map((k) => k.title.toLowerCase().trim())),
+      procedure: new Set(knowledgeService.queryItems({ type: ['procedure'] }).map((k) => k.title.toLowerCase().trim())),
+      tip: new Set(knowledgeService.queryItems({ type: ['tip'] }).map((k) => k.title.toLowerCase().trim())),
+    }
+
+    // 单批保存助手（async：内部调用 saveGraphData 是 async）
+    async function saveOneBatch(
+      result: UnifiedExtractionResult,
+      batchMessages: ChatMessage[]
+    ): Promise<{ batchSavedTotal: number; updatedTypes: string[] }> {
+      const updatedTypes: string[] = []
+      let batchSaved = 0
+
+      const batchFirstMsgTs = batchMessages[0]?.timestamp ?? Math.floor(Date.now() / 1000)
+      const batchFirstMsgId = batchMessages[0]?.id ?? 0
+
+      // 1. Tasks
+      let batchTasksNew = 0
+      for (const task of result.tasks) {
+        try {
+          const existingId = taskService.findIdByNormalizedTitle(task.title)
+          if (existingId != null) {
+            taskService.addTaskSource(existingId, sessionId, batchFirstMsgId, batchFirstMsgTs, task.confidence)
+            mergedTasks++
+            continue
+          }
+          const taskId = taskService.createTask({
+            title: task.title,
+            description: task.description,
+            status: 'pending',
+            priority: task.priority || 'normal',
+            ownerDisplayName: task.ownerName,
+            dueTs: (() => {
+              if (!task.dueDate) return undefined
+              const ts = new Date(task.dueDate).getTime()
+              return isNaN(ts) ? undefined : ts
+            })(),
+            confidence: task.confidence,
+            isManual: false,
+            tags: [],
+            metadata: { sessionId },
+          })
+          taskService.addTaskSource(taskId, sessionId, batchFirstMsgId, batchFirstMsgTs, task.confidence)
+          savedTasks++
+          batchTasksNew++
+        } catch (err) {
+          console.error('[ExtractionRunner] Failed to save task:', err)
+        }
+      }
+      if (batchTasksNew > 0) {
+        updatedTypes.push('tasks')
+        batchSaved += batchTasksNew
+      }
+
+      // 2. Todos
+      let batchTodosNew = 0
+      for (const todo of result.todos) {
+        try {
+          if (todoService.findIdByNormalizedTitle('system', todo.title) != null) {
+            skippedTodos++
+            continue
+          }
+          const requesterPrefix = todo.requesterName ? `来自 ${todo.requesterName}：` : ''
+          const mentionTag =
+            todo.mentionType === 'at_me' ? '[@我]' : todo.mentionType === 'name_me' ? '[点名]' : ''
+          const composedDescription = [requesterPrefix + (todo.description || ''), mentionTag]
+            .filter((s) => s.trim())
+            .join(' ')
+            .trim()
+          todoService.createTodo({
+            globalUserId: 'system',
+            title: todo.title,
+            description: composedDescription || undefined,
+            status: 'pending',
+            priority: 'normal',
+            progress: 0,
+            tags: todo.mentionType ? [todo.mentionType] : [],
+            isStarred: false,
+            sourceType: 'manual',
+            sourceSessionId: sessionId,
+          })
+          savedTodos++
+          batchTodosNew++
+        } catch (err) {
+          console.error('[ExtractionRunner] Failed to save todo:', err)
+        }
+      }
+      if (batchTodosNew > 0) {
+        updatedTypes.push('todos')
+        batchSaved += batchTodosNew
+      }
+
+      // 3. Focus
+      let batchFocusNew = 0
+      for (const item of result.focus) {
+        try {
+          const userId = item.watcher || 'system'
+          if (focusService.findIdByNormalizedTitle(userId, item.type, item.title) != null) {
+            skippedFocus++
+            continue
+          }
+          focusService.createFocusItem({
+            globalUserId: userId,
+            type: item.type,
+            title: item.title,
+            description: item.description,
+            keywords: item.keywords,
+            status: 'active',
+            lastActivityTs: Date.now(),
+          })
+          savedFocus++
+          batchFocusNew++
+        } catch (err) {
+          console.error('[ExtractionRunner] Failed to save focus item:', err)
+        }
+      }
+      if (batchFocusNew > 0) {
+        updatedTypes.push('focus')
+        batchSaved += batchFocusNew
+      }
+
+      // 4. FAQs（用 Set 缓存避免每批 fullscan）
+      let batchFaqsNew = 0
+      for (const faq of result.faqs) {
+        try {
+          const newTitle = faq.question.toLowerCase().trim()
+          if (existingFaqTitleSet.has(newTitle)) continue
+          knowledgeService.createItem({
+            type: 'faq',
+            title: faq.question,
+            content: faq.answer,
+            category: faq.category,
+            tags: [],
+            sourceSessionIds: [sessionId],
+            sourceMessageRefs: [],
+            confidence: faq.confidence,
+            isEdited: false,
+            status: 'active',
+          })
+          existingFaqTitleSet.add(newTitle)
+          savedFaqs++
+          batchFaqsNew++
+        } catch (err) {
+          console.error('[ExtractionRunner] Failed to save FAQ:', err)
+        }
+      }
+      if (batchFaqsNew > 0) {
+        updatedTypes.push('faqs')
+        batchSaved += batchFaqsNew
+      }
+
+      // 5. Knowledge × 4 类
+      const saveKnowledgeOfType = (
+        items: ExtractedKnowledge[],
+        kType: 'concept' | 'document' | 'procedure' | 'tip'
+      ): number => {
+        const titleSet = existingKnowledgeTitleSets[kType]
+        let count = 0
+        for (const k of items) {
+          try {
+            const norm = k.title.toLowerCase().trim()
+            if (titleSet.has(norm)) continue
+            knowledgeService.createItem({
+              type: kType,
+              title: k.title,
+              content: k.content,
+              category: k.category,
+              tags: [],
+              sourceSessionIds: [sessionId],
+              sourceMessageRefs: [],
+              confidence: k.confidence,
+              isEdited: false,
+              status: 'active',
+            })
+            titleSet.add(norm)
+            count++
+          } catch (err) {
+            console.error(`[ExtractionRunner] Failed to save ${kType}:`, err)
+          }
+        }
+        return count
+      }
+      const c = saveKnowledgeOfType(result.concepts, 'concept')
+      const d = saveKnowledgeOfType(result.documents, 'document')
+      const p = saveKnowledgeOfType(result.procedures, 'procedure')
+      const t = saveKnowledgeOfType(result.tips, 'tip')
+      savedConcepts += c
+      savedDocuments += d
+      savedProcedures += p
+      savedTips += t
+      if (c + d + p + t > 0) {
+        updatedTypes.push('knowledge')
+        batchSaved += c + d + p + t
+      }
+
+      // 6. Graph
+      try {
+        if (result.graph.entities.length > 0 || result.graph.relationships.length > 0) {
+          // saveGraphData 的 entityTimeRange 扫描会用 batchMessages 而非全量 messages，
+          // 是 acceptable 退化：每批 entity 的 firstSeenTs/lastSeenTs 限定在它实际出现的批次时间窗，
+          // 反而比之前用全量更精确
+          // eslint-disable-next-line no-inner-declarations
+          const g = await saveGraphData(
+            result.graph.entities,
+            result.graph.relationships,
+            sessionId,
+            batchMessages
+          )
+          savedNodes += g.savedNodes
+          savedEdges += g.savedEdges
+          if (g.savedNodes > 0 || g.savedEdges > 0) {
+            updatedTypes.push('graph')
+            batchSaved += g.savedNodes + g.savedEdges
+          }
+        }
+      } catch (err) {
+        console.error('[ExtractionRunner] Graph save phase failed for batch:', err)
+      }
+
+      return { batchSavedTotal: batchSaved, updatedTypes }
+    }
 
     for (let coreStart = 0; coreStart < messages.length; coreStart += CORE_BATCH) {
       const coreEnd = Math.min(messages.length, coreStart + CORE_BATCH)
@@ -1702,6 +1935,7 @@ export async function startUnifiedExtraction(
 
       const batch = messages.slice(overlapStart, coreEnd)
       const overlapCount = coreStart - overlapStart
+      const batchIndex = Math.floor(coreStart / CORE_BATCH)
       const batchLabel = `${coreStart + 1}-${coreEnd}/${messages.length}`
 
       console.log(
@@ -1731,16 +1965,34 @@ export async function startUnifiedExtraction(
       }
 
       const res = outcome.result
-      allTasks.push(...res.tasks)
-      allTodos.push(...res.todos)
-      allFocus.push(...res.focus)
-      allFaqs.push(...res.faqs)
-      allConcepts.push(...res.concepts)
-      allDocuments.push(...res.documents)
-      allProcedures.push(...res.procedures)
-      allTips.push(...res.tips)
-      allEntities.push(...res.graph.entities)
-      allRelationships.push(...res.graph.relationships)
+
+      // 立即保存本批结果到 DB（仅 ok 批次；其他状态时 result 是 empty，跳过）
+      let batchSavedSummary = { batchSavedTotal: 0, updatedTypes: [] as string[] }
+      if (outcome.status === 'ok') {
+        batchSavedSummary = await saveOneBatch(res, batch)
+
+        // 发实时刷新事件给前端：各 tab 监听后调用自己的 loadXxx 重新读 DB
+        win.webContents.send('collab:extractionBatchDone', {
+          jobId: job.id,
+          sessionId,
+          jobType: 'all',
+          batchIndex,
+          batchLabel,
+          updatedTypes: batchSavedSummary.updatedTypes,
+          cumulative: {
+            tasksExtracted: savedTasks,
+            todosExtracted: savedTodos,
+            focusExtracted: savedFocus,
+            faqExtracted: savedFaqs,
+            conceptsExtracted: savedConcepts,
+            documentsExtracted: savedDocuments,
+            proceduresExtracted: savedProcedures,
+            tipsExtracted: savedTips,
+            nodesExtracted: savedNodes,
+            edgesExtracted: savedEdges,
+          },
+        })
+      }
 
       const batchTotal =
         res.tasks.length +
@@ -1755,7 +2007,7 @@ export async function startUnifiedExtraction(
         res.graph.relationships.length
       logAnalysis(
         'info',
-        `Batch ${batchLabel} ${outcome.status} (overlap=${overlapCount}): tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | batch total=${batchTotal}`
+        `Batch ${batchLabel} ${outcome.status} (overlap=${overlapCount}): extracted tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | extracted=${batchTotal} saved=${batchSavedSummary.batchSavedTotal} updated=[${batchSavedSummary.updatedTypes.join(',')}]`
       )
       if (batchTotal === 0 && outcome.status === 'ok') {
         logAnalysis(
@@ -1767,7 +2019,7 @@ export async function startUnifiedExtraction(
       const progress = Math.min(85, 10 + Math.floor((coreEnd / messages.length) * 75))
       reportProgress(
         progress,
-        `已分析 ${coreEnd}/${messages.length} 条消息 · 累计 tasks=${allTasks.length} todos=${allTodos.length} focus=${allFocus.length} faqs=${allFaqs.length}`
+        `已分析 ${coreEnd}/${messages.length} 条消息 · 累计 tasks=${savedTasks} todos=${savedTodos} focus=${savedFocus} faqs=${savedFaqs}`
       )
     }
 
@@ -1781,23 +2033,7 @@ export async function startUnifiedExtraction(
     )
 
     if (totalBatches > 0 && batchCounts.ok === 0) {
-      // 选最有诊断价值的 reason：优先 no_config / no_tool_call（用户可改配置），
-      // 其次 aborted（提示模型太慢），最后 error（兜底）
-      let reason: ExtractionErrorReason
-      let userMsg: string
-      if (batchCounts.no_config > 0) {
-        reason = 'LLM_NOT_CONFIGURED'
-        userMsg = 'LLM 配置不可用，全部 ' + totalBatches + ' 个批次失败'
-      } else if (batchCounts.no_tool_call >= batchCounts.aborted) {
-        reason = 'BATCHES_NO_TOOL_CALL'
-        userMsg = `所配置的模型不支持 function calling（${batchCounts.no_tool_call}/${totalBatches} 批次），请改用 Claude / GPT-4 / Gemini / Qwen-Max 等支持 tool calling 的模型`
-      } else if (batchCounts.aborted >= batchCounts.error) {
-        reason = 'BATCHES_TIMED_OUT'
-        userMsg = `LLM 响应过慢，${batchCounts.aborted}/${totalBatches} 批次在 180 秒内未完成。建议换响应更快的模型或检查网络`
-      } else {
-        reason = 'BATCHES_FAILED'
-        userMsg = `全部 ${totalBatches} 批次失败：${lastErrorMessage || '未知原因'}`
-      }
+      const { reason, userMsg } = pickAllFailedReason(totalBatches, batchCounts, lastErrorMessage)
       logAnalysis('error', `All batches failed → failJob with reason=${reason}: ${userMsg}`)
       extractionJobService.failJob(job.id, reason, userMsg)
       win.webContents.send('collab:extractionError', {
@@ -1819,228 +2055,9 @@ export async function startUnifiedExtraction(
       )
     }
 
-    const dedupedTasks = deduplicateTasks(allTasks)
-    const dedupedTodos = deduplicateTodos(allTodos)
-    const dedupedFocus = deduplicateFocusItems(allFocus)
-    const dedupedFaqs = deduplicateFAQs(allFaqs)
-    const dedupedEntities = deduplicateEntities(allEntities)
-
-    reportProgress(90, '正在保存全部结果...')
-
-    // 1. Tasks —— createTask 只写主表，还要再写 task_source 才能被 getTasksBySession 查到
-    // 跨批次去重：若 DB 中已有同标题任务（大小写/空白不敏感），不再新建，只追加 source
-    let savedTasks = 0
-    let mergedTasks = 0
-    const firstMsgTs = messages[0]?.timestamp ?? Math.floor(Date.now() / 1000)
-    const firstMsgId = messages[0]?.id ?? 0
-    for (const task of dedupedTasks) {
-      try {
-        const existingId = taskService.findIdByNormalizedTitle(task.title)
-        if (existingId != null) {
-          taskService.addTaskSource(existingId, sessionId, firstMsgId, firstMsgTs, task.confidence)
-          mergedTasks++
-          continue
-        }
-        const taskData: Omit<GlobalTask, 'id' | 'createdTs' | 'updatedTs'> = {
-          title: task.title,
-          description: task.description,
-          status: 'pending',
-          priority: task.priority || 'normal',
-          ownerDisplayName: task.ownerName,
-          dueTs: (() => {
-            if (!task.dueDate) return undefined
-            const ts = new Date(task.dueDate).getTime()
-            return isNaN(ts) ? undefined : ts
-          })(),
-          confidence: task.confidence,
-          isManual: false,
-          tags: [],
-          metadata: { sessionId },
-        }
-        const taskId = taskService.createTask(taskData)
-        taskService.addTaskSource(taskId, sessionId, firstMsgId, firstMsgTs, task.confidence)
-        savedTasks++
-      } catch (err) {
-        console.error('[ExtractionRunner] Failed to save task:', err)
-      }
-    }
-    if (mergedTasks > 0) {
-      console.log(`[ExtractionRunner] Tasks: ${savedTasks} new, ${mergedTasks} merged into existing`)
-    }
-
-    // 2. Todos —— 本次提取语义：别人 @我 / 点名我 的无时间请求
-    // 跨批次去重：(globalUserId, 归一化标题) 已存在则跳过
-    let savedTodos = 0
-    let skippedTodos = 0
-    for (const todo of dedupedTodos) {
-      try {
-        if (todoService.findIdByNormalizedTitle('system', todo.title) != null) {
-          skippedTodos++
-          continue
-        }
-        const requesterPrefix = todo.requesterName ? `来自 ${todo.requesterName}：` : ''
-        const mentionTag = todo.mentionType === 'at_me' ? '[@我]' : todo.mentionType === 'name_me' ? '[点名]' : ''
-        const composedDescription = [requesterPrefix + (todo.description || ''), mentionTag]
-          .filter((s) => s.trim())
-          .join(' ')
-          .trim()
-        todoService.createTodo({
-          globalUserId: 'system',
-          title: todo.title,
-          description: composedDescription || undefined,
-          status: 'pending',
-          priority: 'normal',
-          progress: 0,
-          tags: todo.mentionType ? [todo.mentionType] : [],
-          isStarred: false,
-          sourceType: 'manual',
-          sourceSessionId: sessionId,
-        })
-        savedTodos++
-      } catch (err) {
-        console.error('[ExtractionRunner] Failed to save todo:', err)
-      }
-    }
-    if (skippedTodos > 0) {
-      console.log(`[ExtractionRunner] Todos: ${savedTodos} new, ${skippedTodos} skipped (duplicate)`)
-    }
-
-    // 3. Focus —— watcher 字段映射到 globalUserId，保留"谁在关注"的信息
-    // 跨批次去重：(globalUserId, type, 归一化标题) 已存在则跳过
-    let savedFocus = 0
-    let skippedFocus = 0
-    for (const item of dedupedFocus) {
-      try {
-        const userId = item.watcher || 'system'
-        if (focusService.findIdByNormalizedTitle(userId, item.type, item.title) != null) {
-          skippedFocus++
-          continue
-        }
-        focusService.createFocusItem({
-          globalUserId: userId,
-          type: item.type,
-          title: item.title,
-          description: item.description,
-          keywords: item.keywords,
-          status: 'active',
-          lastActivityTs: Date.now(),
-        })
-        savedFocus++
-      } catch (err) {
-        console.error('[ExtractionRunner] Failed to save focus item:', err)
-      }
-    }
-    if (skippedFocus > 0) {
-      console.log(`[ExtractionRunner] Focus: ${savedFocus} new, ${skippedFocus} skipped (duplicate)`)
-    }
-
-    // 4. FAQs（跨会话去重）
-    // 优化：先用 Set 做精确归一化匹配（覆盖 99% 重复场景），只有未精确命中
-    // 才回落到 Levenshtein 模糊比较——把原来 O(existing × new) 的两层循环
-    // 退化成 Set.has() O(1)，大规模知识库下差异巨大。
-    let savedFaqs = 0
-    try {
-      const existingFAQs = knowledgeService.queryItems({ type: ['faq'] })
-      const existingTitles = existingFAQs.map((f) => f.title.toLowerCase().trim())
-      const existingTitleSet = new Set<string>(existingTitles)
-      for (const faq of dedupedFaqs) {
-        try {
-          const newTitle = faq.question.toLowerCase().trim()
-          if (existingTitleSet.has(newTitle)) continue
-          const isDuplicate = existingTitles.some((existing) => {
-            const longer = Math.max(existing.length, newTitle.length)
-            if (longer === 0) return true
-            const distance = levenshteinSimple(existing, newTitle)
-            return 1 - distance / longer >= 0.8
-          })
-          if (isDuplicate) {
-            existingTitleSet.add(newTitle)
-            continue
-          }
-          knowledgeService.createItem({
-            type: 'faq',
-            title: faq.question,
-            content: faq.answer,
-            category: faq.category,
-            tags: [],
-            sourceSessionIds: [sessionId],
-            sourceMessageRefs: [],
-            confidence: faq.confidence,
-            isEdited: false,
-            status: 'active',
-          })
-          existingTitles.push(newTitle)
-          savedFaqs++
-        } catch (err) {
-          console.error('[ExtractionRunner] Failed to save FAQ:', err)
-        }
-      }
-    } catch (err) {
-      console.error('[ExtractionRunner] FAQ save phase failed:', err)
-    }
-
-    // 5. Concepts / Documents / Procedures / Tips —— 写入 knowledge_item 表
-    // 同 FAQ 的优化：先 Set 精确命中，再 fallback 到 Levenshtein。
-    const saveKnowledgeBatch = (items: ExtractedKnowledge[], kType: 'concept' | 'document' | 'procedure' | 'tip') => {
-      let count = 0
-      const existing = knowledgeService.queryItems({ type: [kType] })
-      const existingTitles = existing.map((f) => f.title.toLowerCase().trim())
-      const existingTitleSet = new Set<string>(existingTitles)
-      const seenInThisBatch = new Set<string>()
-      for (const k of items) {
-        try {
-          const norm = k.title.toLowerCase().trim()
-          if (seenInThisBatch.has(norm)) continue
-          if (existingTitleSet.has(norm)) {
-            seenInThisBatch.add(norm)
-            continue
-          }
-          const isDup = existingTitles.some((e) => {
-            const longer = Math.max(e.length, norm.length)
-            if (longer === 0) return true
-            return 1 - levenshteinSimple(e, norm) / longer >= 0.85
-          })
-          if (isDup) {
-            existingTitleSet.add(norm)
-            seenInThisBatch.add(norm)
-            continue
-          }
-          knowledgeService.createItem({
-            type: kType,
-            title: k.title,
-            content: k.content,
-            category: k.category,
-            tags: [],
-            sourceSessionIds: [sessionId],
-            sourceMessageRefs: [],
-            confidence: k.confidence,
-            isEdited: false,
-            status: 'active',
-          })
-          seenInThisBatch.add(norm)
-          count++
-        } catch (err) {
-          console.error(`[ExtractionRunner] Failed to save ${kType}:`, err)
-        }
-      }
-      return count
-    }
-
-    const savedConcepts = saveKnowledgeBatch(allConcepts, 'concept')
-    const savedDocuments = saveKnowledgeBatch(allDocuments, 'document')
-    const savedProcedures = saveKnowledgeBatch(allProcedures, 'procedure')
-    const savedTips = saveKnowledgeBatch(allTips, 'tip')
-
-    // 6. Graph
-    let savedNodes = 0
-    let savedEdges = 0
-    try {
-      const res = await saveGraphData(dedupedEntities, allRelationships, sessionId, messages)
-      savedNodes = res.savedNodes
-      savedEdges = res.savedEdges
-    } catch (err) {
-      console.error('[ExtractionRunner] Graph save phase failed:', err)
-    }
+    // v0.17.9: 保存已经在循环里 saveOneBatch 实时做了，这里直接收尾。
+    // 旧版的 dedupedTasks / 5 个 save loop / saveKnowledgeBatch 闭包已全部移到循环内部。
+    reportProgress(90, '所有批次保存完成，最终收尾...')
 
     extractionJobService.finishJob(job.id, {
       tasksExtracted: savedTasks,

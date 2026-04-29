@@ -7,6 +7,7 @@ import { useTaskStore } from '@/stores/task'
 import { useSessionStore } from '@/stores/session'
 import { useLayoutStore } from '@/stores/layout'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
+import { useExtractionRefresh } from '@/composables/useExtractionRefresh'
 
 const props = defineProps<{
   sessionId: string
@@ -138,6 +139,15 @@ onMounted(async () => {
   await Promise.all([loadTasks(), loadExtractionStatus()])
   setupExtractionListeners()
 })
+
+// v0.17.9: 实时批次刷新（既刷任务列表也刷 extraction job 状态卡）
+// 既有的 extractionDone listener 会重复 loadTasks，但由 debounce 合并为一次。
+useExtractionRefresh(
+  async () => {
+    await Promise.all([loadTasks(), loadExtractionStatus()])
+  },
+  { types: ['tasks'] }
+)
 
 onUnmounted(() => {
   _ipcCleanups.forEach((fn) => fn())

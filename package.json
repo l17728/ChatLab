@@ -1,6 +1,6 @@
 {
   "name": "ChatLab",
-  "version": "0.17.8",
+  "version": "0.17.9",
   "description": "本地化的聊天记录分析工具，通过 SQL 和 AI Agent 回顾你的社交记忆",
   "repository": {
     "type": "git",
@@ -26,7 +26,7 @@
     "type-check:node": "tsc --noEmit -p tsconfig.node.json",
     "type-check:all": "npm run type-check:web && npm run type-check:node",
     "type-check": "vue-tsc --noEmit -p tsconfig.web.json",
-    "test:unit": "node --import ./tests/setup/register-loader.mjs --experimental-strip-types --test electron/main/ai/llm/formatError.test.ts electron/main/ai/llm/preflightReason.test.ts",
+    "test:unit": "node --import ./tests/setup/register-loader.mjs --experimental-strip-types --test electron/main/ai/llm/formatError.test.ts electron/main/ai/llm/preflightReason.test.ts electron/main/services/pickAllFailedReason.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "PWHEADLESS=false playwright test",

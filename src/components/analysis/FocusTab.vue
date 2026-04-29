@@ -4,6 +4,7 @@ import { useVirtualList } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useFocusStore } from '@/stores/focus'
 import { isBrowserEnvironment } from '@/composables/useEnvironment'
+import { useExtractionRefresh } from '@/composables/useExtractionRefresh'
 import type { FocusItem } from '@electron/main/services/focusService'
 
 const focusStore = useFocusStore()
@@ -31,6 +32,9 @@ const isCreating = ref(false)
 onMounted(async () => {
   await focusStore.loadItems()
 })
+
+// v0.17.9: AI 分析批次完成时实时刷新关注点列表
+useExtractionRefresh(() => focusStore.loadItems(), { types: ['focus'] })
 
 async function handleCreate() {
   if (!newFocusTitle.value.trim()) return
