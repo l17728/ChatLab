@@ -24,6 +24,7 @@ import {
   startFaqExtraction,
   startFocusExtraction,
   startUnifiedExtraction,
+  retryFailedBatchesForSession,
 } from '../services/extractionRunner'
 import { openDatabase } from '../database/core'
 import { logAnalysis } from '../ai/analysisLog'
@@ -192,6 +193,9 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
       // 简化：假设 id 连续递增（SQLite 自增），新消息数 = total - lastAnalyzedId
       // 如不连续，后续可改为 "count where id > lastAnalyzedId"
       const newMessageCount = Math.max(0, total - lastAnalyzedId)
+      // v0.17.10: 把 failedBatches.length 暴露给前端，> 0 时显示"重试失败批次"按钮
+      const failedBatchesArr = (lastDone?.resultSummary?.failedBatches as unknown[] | undefined) ?? []
+      const failedBatchCount = Array.isArray(failedBatchesArr) ? failedBatchesArr.length : 0
       return {
         success: true,
         data: {
@@ -202,6 +206,7 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
           newMessageCount,
           hasNewMessages: newMessageCount > 0,
           everAnalyzed: !!lastDone,
+          failedBatchCount,
         },
       }
     } catch (error) {
@@ -219,6 +224,27 @@ export function registerCollaborationHandlers(ctx: IpcContext): void {
       return { success: false, error: String(error) }
     }
   })
+
+  // v0.17.10: 重试上次分析的失败批次
+  ipcMain.handle(
+    'collab:retryFailedBatches',
+    async (_event, sessionId: string, globalNicknames: string[] = []) => {
+      try {
+        logAnalysis(
+          'info',
+          `IPC retryFailedBatches: sessionId=${sessionId} nicknames=${globalNicknames.length}`
+        )
+        // 不阻塞 IPC：异步触发，前端通过 progress/done/error 事件感知结果
+        retryFailedBatchesForSession(sessionId, win, globalNicknames).catch((err) =>
+          console.error('[Collaboration] retryFailedBatchesForSession error:', err)
+        )
+        return { success: true }
+      } catch (error) {
+        console.error('[Collaboration] retryFailedBatches failed:', error)
+        return { success: false, error: String(error) }
+      }
+    }
+  )
 
   ipcMain.handle('collab:getFailedJobs', async (_event, limit: number = 10) => {
     try {

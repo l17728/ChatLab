@@ -263,6 +263,8 @@ const analysisStatus = ref<{
   hasNewMessages: boolean
   everAnalyzed: boolean
   lastAnalyzedAt: number | null
+  // v0.17.10: 上次分析里仍未恢复的失败批次数（>0 显示"重试失败批次"按钮）
+  failedBatchCount: number
 } | null>(null)
 
 async function refreshAnalysisStatus() {
@@ -275,6 +277,7 @@ async function refreshAnalysisStatus() {
         hasNewMessages: res.data.hasNewMessages,
         everAnalyzed: res.data.everAnalyzed,
         lastAnalyzedAt: res.data.lastAnalyzedAt,
+        failedBatchCount: res.data.failedBatchCount ?? 0,
       }
     }
   } catch (err) {
@@ -298,6 +301,44 @@ const analysisButtonDisabled = computed(() => {
   if (analysisStatus.value?.everAnalyzed && !analysisStatus.value.hasNewMessages) return true
   return false
 })
+
+// v0.17.10: "重试失败批次"按钮的显示条件
+const hasFailedBatches = computed(() => (analysisStatus.value?.failedBatchCount ?? 0) > 0)
+const retryFailedLabel = computed(() => `重试失败批次 (${analysisStatus.value?.failedBatchCount ?? 0})`)
+
+async function triggerRetryFailedBatches() {
+  if (isBrowserEnvironment() || !currentSessionId.value) return
+  if (isReanalyzing.value) return
+  isReanalyzing.value = true
+  try {
+    // 同样从 ownerId 反查 nicknames（与主分析路径一致）
+    const ownerId = sessionStore.currentSession?.ownerId
+    const members: any[] = await window.chatApi.getMembers(currentSessionId.value).catch(() => [])
+    const me = members.find((m) => m.platformId === ownerId)
+    const nicknameSet = new Set<string>()
+    if (me) {
+      if (typeof me.accountName === 'string' && me.accountName.trim()) nicknameSet.add(me.accountName.trim())
+      if (typeof me.groupNickname === 'string' && me.groupNickname.trim()) nicknameSet.add(me.groupNickname.trim())
+      const aliases = Array.isArray(me.aliases) ? me.aliases : []
+      for (const alias of aliases) {
+        if (typeof alias === 'string' && alias.trim()) nicknameSet.add(alias.trim())
+      }
+    }
+    if (nicknameSet.size === 0) {
+      const globalNicks = settingsStore.identityConfig.globalNicknames ?? []
+      for (const n of globalNicks) {
+        if (typeof n === 'string' && n.trim()) nicknameSet.add(n.trim())
+      }
+    }
+    const nicks = Array.from(nicknameSet)
+    console.log(`[GroupChat] retry failed batches with nicks=${JSON.stringify(nicks)}`)
+    await window.collabApi?.retryFailedBatches(currentSessionId.value, nicks)
+  } catch (err) {
+    console.error('[GroupChat] triggerRetryFailedBatches failed:', err)
+    isReanalyzing.value = false
+    refreshAnalysisStatus()
+  }
+}
 
 async function triggerUnifiedAnalysis() {
   if (isBrowserEnvironment() || !currentSessionId.value) return
@@ -389,6 +430,8 @@ onMounted(() => {
           hasNewMessages: false,
           everAnalyzed: true,
           lastAnalyzedAt: Date.now(),
+          // failedBatchCount 由 refreshAnalysisStatus() 从 IPC 同步真实值，这里先沿用旧值或 0
+          failedBatchCount: analysisStatus.value?.failedBatchCount ?? 0,
         }
         // 仍然异步刷新一次以同步真实 lastAnalyzedAt 等字段
         refreshAnalysisStatus()
@@ -447,6 +490,18 @@ onMounted(() => {
               v-if="analysisStatus?.hasNewMessages && !isReanalyzing"
               class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
             />
+          </UButton>
+          <!-- v0.17.10: 上次分析有失败批次时显示重试按钮（带 N 数标记） -->
+          <UButton
+            v-if="hasFailedBatches && !isReanalyzing"
+            color="warning"
+            variant="solid"
+            size="sm"
+            icon="i-heroicons-arrow-path"
+            :title="`上次分析有 ${analysisStatus?.failedBatchCount} 个批次因 LLM 超时/错误未完成。点击只重试这些失败批次（已成功的不会重做）。`"
+            @click="triggerRetryFailedBatches"
+          >
+            {{ retryFailedLabel }}
           </UButton>
           <UButton
             color="primary"

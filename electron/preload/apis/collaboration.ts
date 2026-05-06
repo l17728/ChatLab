@@ -70,6 +70,10 @@ export const collabApi = {
   retryExtractionJob: (jobId: string): Promise<CollabApiResult> =>
     ipcRenderer.invoke('collab:retryExtractionJob', jobId),
 
+  // v0.17.10: 重试 sessions 上次分析的 failedBatches
+  retryFailedBatches: (sessionId: string, globalNicknames?: string[]): Promise<CollabApiResult> =>
+    ipcRenderer.invoke('collab:retryFailedBatches', sessionId, globalNicknames),
+
   // 查询增量分析状态：还有多少新消息未被分析
   getAnalysisStatus: (
     sessionId: string
@@ -82,6 +86,8 @@ export const collabApi = {
       newMessageCount: number
       hasNewMessages: boolean
       everAnalyzed: boolean
+      // v0.17.10: 上次分析里仍未恢复的失败批次数；> 0 时前端显示"重试失败批次"按钮
+      failedBatchCount: number
     }>
   > => ipcRenderer.invoke('collab:getAnalysisStatus', sessionId),
 

@@ -1301,6 +1301,51 @@ interface BatchOutcome {
 }
 
 /**
+ * 失败批次记录：会序列化到 extraction_jobs.result_summary.failedBatches[]，
+ * 供"重试失败批次"按钮读取并重跑。
+ *
+ * 用 message id 范围标识而不是数组下标，因为下次重试时 messages 数组可能因
+ * 增量导入或其他原因有偏移。id 在 SQLite 自增表里是稳定的。
+ */
+interface FailedBatch {
+  /** 该失败批次首条消息的 id（包含） */
+  startMessageId: number
+  /** 该失败批次末条消息的 id（包含） */
+  endMessageId: number
+  /** 范围内消息条数（冗余字段，用于前端展示而不需要再算一遍） */
+  messageCount: number
+  /** 最后一次 LLM 调用的错误文本 */
+  lastError?: string
+  /** 最后一次 LLM 调用的 status，决定下次重试用什么策略 */
+  lastStatus: BatchStatus
+  /** 已尝试次数（含 split 拆分后每个 sub-slice 的尝试） */
+  attempts: number
+}
+
+/**
+ * processBatchWithRetry 的返回结构：一个原始 batch 经过 B（重试）+ A（split）后，
+ * 可能产出 0~N 个 ok slice 和 0~N 个 fail slice。
+ */
+interface ProcessedBatch {
+  /** 成功提取的片段（可能是原 batch 整个，也可能是 split 后的某一半） */
+  successfulSlices: { msgs: ChatMessage[]; result: UnifiedExtractionResult }[]
+  /** 失败的片段；coreMsgs 不含 overlap，准备序列化进 failedBatches */
+  failureSlices: {
+    msgs: ChatMessage[]
+    coreMsgs: ChatMessage[]
+    status: BatchStatus
+    lastError?: string
+    attempts: number
+  }[]
+  /** 该 batch 总共发了多少次 LLM 请求（含重试和 split 子片段） */
+  totalAttempts: number
+  /** 最后一次失败的 status，给上层 batchCounts 累加 */
+  lastFailedStatus?: BatchStatus
+  /** 最后一次失败的 errorMessage，给上层 lastErrorMessage 兜底 */
+  lastErrorMessage?: string
+}
+
+/**
  * 一次 LLM 调用同时输出 tasks / todos / focus / faqs / graph。
  *
  * 工作方式（长期最优方案）：
@@ -1531,6 +1576,162 @@ function parseRawJsonFallback(raw: string, empty: UnifiedExtractionResult): Unif
 // deduplicateTodos / deduplicateFocusItems / deduplicateFAQs 等历史 helper 已删除。
 
 /**
+ * v0.17.10: 单批 LLM 调用 + 自动 retry + split 兜底。
+ *
+ * 调用顺序：
+ *   1. 第 1 次调用（可能 ok / aborted / error / no_tool_call / no_config）
+ *   2. ok → 直接返回
+ *   3. no_tool_call / no_config → 系统性失败，重试同样不会变好，直接返回 failureSlice
+ *   4. aborted / error → 用相同参数重试 1 次（B 策略）
+ *   5. 仍失败且 coreMsgs.length >= MIN_SPLIT_SIZE → 把 batch 切成左右两半各跑（A 策略）
+ *      切片后不再递归 split（避免 split-of-split 把 batch 切到 1 条）
+ *   6. coreMsgs 太少不能再 split → 记 failureSlice 让用户后续手动重试
+ *
+ * "coreMsgs vs llmInput" 的区别：llmInput 是给 LLM 看的（可能含 overlap 上下文），
+ * coreMsgs 是这一批"实际算分析过的新消息"（不含 overlap）。失败记录用 coreMsgs 范围
+ * 是为了下次重试只重跑 core，不要再次分析已经成功的旧消息。
+ */
+const MIN_SPLIT_SIZE = 6 // 小于这个数量就不再 split
+
+async function processBatchWithRetry(
+  llmInput: ChatMessage[],
+  coreStartIdx: number,
+  coreEndIdx: number,
+  onProgress: (info: { textTokens?: number; toolTokens: number; label: string }) => void,
+  globalNicknames: string[] = []
+): Promise<ProcessedBatch> {
+  const coreMsgs = llmInput.slice(llmInput.length - (coreEndIdx - coreStartIdx))
+  const baseLabel = `${coreStartIdx + 1}-${coreEndIdx}`
+
+  let attempts = 0
+
+  // === 第 1 次尝试 ===
+  let lastPush = 0
+  attempts++
+  let outcome = await extractAllWithLLM(
+    llmInput,
+    ({ toolTokens, textTokens }) => {
+      const now = Date.now()
+      if (now - lastPush < 500) return
+      lastPush = now
+      onProgress({ toolTokens, textTokens, label: baseLabel })
+    },
+    globalNicknames
+  )
+
+  if (outcome.status === 'ok') {
+    return { successfulSlices: [{ msgs: llmInput, result: outcome.result }], failureSlices: [], totalAttempts: attempts }
+  }
+
+  // 系统性失败（配置 / 不支持 tool calling）：重试同样不会成功，立即记失败
+  if (outcome.status === 'no_config' || outcome.status === 'no_tool_call') {
+    logAnalysis(
+      'warn',
+      `Batch ${baseLabel} systemic-failed (${outcome.status}), retry/split won't help, giving up`
+    )
+    return {
+      successfulSlices: [],
+      failureSlices: [{ msgs: llmInput, coreMsgs, status: outcome.status, lastError: outcome.errorMessage, attempts }],
+      totalAttempts: attempts,
+      lastFailedStatus: outcome.status,
+      lastErrorMessage: outcome.errorMessage,
+    }
+  }
+
+  // === B 策略：相同参数 retry 一次（多用于网络抖动 / provider 排队瞬时问题） ===
+  logAnalysis('warn', `Batch ${baseLabel} ${outcome.status}, retrying once with same params (strategy B)`)
+  attempts++
+  lastPush = 0
+  outcome = await extractAllWithLLM(
+    llmInput,
+    ({ toolTokens, textTokens }) => {
+      const now = Date.now()
+      if (now - lastPush < 500) return
+      lastPush = now
+      onProgress({ toolTokens, textTokens, label: `${baseLabel}(retry)` })
+    },
+    globalNicknames
+  )
+
+  if (outcome.status === 'ok') {
+    logAnalysis('info', `Batch ${baseLabel} succeeded on retry`)
+    return { successfulSlices: [{ msgs: llmInput, result: outcome.result }], failureSlices: [], totalAttempts: attempts }
+  }
+
+  // === A 策略：split coreMsgs 成左右两半各跑一次（无 overlap, 不再递归 split） ===
+  if (coreMsgs.length >= MIN_SPLIT_SIZE) {
+    const mid = Math.floor(coreMsgs.length / 2)
+    const leftCore = coreMsgs.slice(0, mid)
+    const rightCore = coreMsgs.slice(mid)
+    logAnalysis(
+      'warn',
+      `Batch ${baseLabel} retry also ${outcome.status}, splitting into halves (left=${leftCore.length}, right=${rightCore.length}) — strategy A`
+    )
+
+    // split 后的每个子片段不再 retry / split（避免无限拆），各只调一次 LLM
+    attempts++
+    const leftOutcome = await extractAllWithLLM(
+      leftCore,
+      ({ toolTokens, textTokens }) =>
+        onProgress({ toolTokens, textTokens, label: `${baseLabel}(split-L)` }),
+      globalNicknames
+    )
+    attempts++
+    const rightOutcome = await extractAllWithLLM(
+      rightCore,
+      ({ toolTokens, textTokens }) =>
+        onProgress({ toolTokens, textTokens, label: `${baseLabel}(split-R)` }),
+      globalNicknames
+    )
+
+    const successes: ProcessedBatch['successfulSlices'] = []
+    const failures: ProcessedBatch['failureSlices'] = []
+
+    if (leftOutcome.status === 'ok') {
+      successes.push({ msgs: leftCore, result: leftOutcome.result })
+    } else {
+      failures.push({
+        msgs: leftCore,
+        coreMsgs: leftCore,
+        status: leftOutcome.status,
+        lastError: leftOutcome.errorMessage,
+        attempts: 1,
+      })
+    }
+    if (rightOutcome.status === 'ok') {
+      successes.push({ msgs: rightCore, result: rightOutcome.result })
+    } else {
+      failures.push({
+        msgs: rightCore,
+        coreMsgs: rightCore,
+        status: rightOutcome.status,
+        lastError: rightOutcome.errorMessage,
+        attempts: 1,
+      })
+    }
+
+    const lastFailed = failures[failures.length - 1]
+    return {
+      successfulSlices: successes,
+      failureSlices: failures,
+      totalAttempts: attempts,
+      lastFailedStatus: lastFailed?.status,
+      lastErrorMessage: lastFailed?.lastError,
+    }
+  }
+
+  // === 给不能再 split 的小 batch 记失败 ===
+  logAnalysis('error', `Batch ${baseLabel} retry failed and too small to split, recording for manual retry`)
+  return {
+    successfulSlices: [],
+    failureSlices: [{ msgs: llmInput, coreMsgs, status: outcome.status, lastError: outcome.errorMessage, attempts }],
+    totalAttempts: attempts,
+    lastFailedStatus: outcome.status,
+    lastErrorMessage: outcome.errorMessage,
+  }
+}
+
+/**
  * 启动统一多类型提取（异步，不阻塞）
  * 使用一次 LLM 调用覆盖 tasks/todos/focus/faqs/graph 五类输出
  * 进度事件 jobType='all'，监听器通过 sessionId 判断归属
@@ -1661,6 +1862,11 @@ export async function startUnifiedExtraction(
     }
     let totalBatches = 0
     let lastErrorMessage: string | undefined
+
+    // v0.17.10: 失败 slice 记录到 failedBatches，存到 resultSummary 里给"重试失败批次"用。
+    // 每条 entry 标识一段连续的 message id 范围 [startMessageId, endMessageId]，
+    // 不含 overlap（重试时根据 ID 范围重新拉，overlap 由 retry 路径自己再算）。
+    const failedBatches: FailedBatch[] = []
 
     // ========== 实时保存重构（v0.17.9）==========
     // v0.17.8 之前：循环里只 push 到 allTasks 等内存数组，等所有批次跑完后统一 dedup +
@@ -1942,36 +2148,43 @@ export async function startUnifiedExtraction(
         `[ExtractionRunner] Unified batch core=${coreStart}-${coreEnd} overlap=${overlapCount} (size=${batch.length})`
       )
 
-      // 节流 token 进度：每 500ms 最多推一次，避免刷爆 IPC
-      // 关键：进度基准用 coreEnd / messages.length（coreEnd 单步递增），
-      // 配合外层 ratchet 彻底消除回退。
-      let lastPush = 0
-      const outcome = await extractAllWithLLM(
+      // v0.17.10: 用 processBatchWithRetry 取代单次调用 —— 内部做 B（同参数 retry 一次）
+      // + A（仍失败则 split 成两半各跑）。返回若干 successfulSlices + 若干 failureSlices。
+      const sliceResult = await processBatchWithRetry(
         batch,
-        ({ toolTokens }) => {
-          const now = Date.now()
-          if (now - lastPush < 500) return
-          lastPush = now
+        coreStart,
+        coreEnd,
+        ({ toolTokens, label }) => {
           const progress = Math.min(85, 10 + Math.floor((coreEnd / messages.length) * 75))
-          reportProgress(progress, `批次 ${batchLabel} · 生成中 ${toolTokens} 字符`)
+          reportProgress(progress, `批次 ${label} · 生成中 ${toolTokens} 字符`)
         },
         globalNicknames
       )
 
       totalBatches++
-      batchCounts[outcome.status]++
-      if (outcome.status !== 'ok' && outcome.errorMessage) {
-        lastErrorMessage = outcome.errorMessage
+      // 把 sliceResult 的"主结局" status 计入 batchCounts：
+      //   - 任何 slice ok 即视为 ok（即便有失败 slice 也算 partial-ok）
+      //   - 全失败时取 lastFailedStatus
+      if (sliceResult.successfulSlices.length > 0) {
+        batchCounts.ok++
+      } else if (sliceResult.lastFailedStatus) {
+        batchCounts[sliceResult.lastFailedStatus]++
+        if (sliceResult.lastErrorMessage) lastErrorMessage = sliceResult.lastErrorMessage
       }
 
-      const res = outcome.result
-
-      // 立即保存本批结果到 DB（仅 ok 批次；其他状态时 result 是 empty，跳过）
+      // 保存所有 ok 的 slice
       let batchSavedSummary = { batchSavedTotal: 0, updatedTypes: [] as string[] }
-      if (outcome.status === 'ok') {
-        batchSavedSummary = await saveOneBatch(res, batch)
-
-        // 发实时刷新事件给前端：各 tab 监听后调用自己的 loadXxx 重新读 DB
+      for (const slice of sliceResult.successfulSlices) {
+        const sliceSummary = await saveOneBatch(slice.result, slice.msgs)
+        batchSavedSummary.batchSavedTotal += sliceSummary.batchSavedTotal
+        for (const t of sliceSummary.updatedTypes) {
+          if (!batchSavedSummary.updatedTypes.includes(t)) {
+            batchSavedSummary.updatedTypes.push(t)
+          }
+        }
+      }
+      if (sliceResult.successfulSlices.length > 0) {
+        // 任意一片 ok 就发刷新事件，前端不区分 split slice
         win.webContents.send('collab:extractionBatchDone', {
           jobId: job.id,
           sessionId,
@@ -1994,27 +2207,23 @@ export async function startUnifiedExtraction(
         })
       }
 
-      const batchTotal =
-        res.tasks.length +
-        res.todos.length +
-        res.focus.length +
-        res.faqs.length +
-        res.concepts.length +
-        res.documents.length +
-        res.procedures.length +
-        res.tips.length +
-        res.graph.entities.length +
-        res.graph.relationships.length
+      // 记录失败的 slice 进 failedBatches，方便用户后续手动重试
+      for (const failure of sliceResult.failureSlices) {
+        if (failure.coreMsgs.length === 0) continue // 全是 overlap 的失败片忽略
+        failedBatches.push({
+          startMessageId: failure.coreMsgs[0].id,
+          endMessageId: failure.coreMsgs[failure.coreMsgs.length - 1].id,
+          messageCount: failure.coreMsgs.length,
+          lastError: failure.lastError,
+          lastStatus: failure.status,
+          attempts: failure.attempts,
+        })
+      }
+
       logAnalysis(
         'info',
-        `Batch ${batchLabel} ${outcome.status} (overlap=${overlapCount}): extracted tasks=${res.tasks.length} todos=${res.todos.length} focus=${res.focus.length} faqs=${res.faqs.length} concepts=${res.concepts.length} docs=${res.documents.length} procs=${res.procedures.length} tips=${res.tips.length} entities=${res.graph.entities.length} edges=${res.graph.relationships.length} | extracted=${batchTotal} saved=${batchSavedSummary.batchSavedTotal} updated=[${batchSavedSummary.updatedTypes.join(',')}]`
+        `Batch ${batchLabel} done: successSlices=${sliceResult.successfulSlices.length} failedSlices=${sliceResult.failureSlices.length} totalAttempts=${sliceResult.totalAttempts} | saved=${batchSavedSummary.batchSavedTotal} updated=[${batchSavedSummary.updatedTypes.join(',')}]`
       )
-      if (batchTotal === 0 && outcome.status === 'ok') {
-        logAnalysis(
-          'warn',
-          `Batch ${batchLabel} ok but returned 0 items. 可能聊天内容确实没有可提取信息（小群闲聊）`
-        )
-      }
 
       const progress = Math.min(85, 10 + Math.floor((coreEnd / messages.length) * 75))
       reportProgress(
@@ -2073,6 +2282,8 @@ export async function startUnifiedExtraction(
       // 下次默认运行（forceRerun=false）只处理 id > lastAnalyzedMessageId 的新消息
       lastAnalyzedMessageId: maxMessageId,
       mode,
+      // v0.17.10: 失败 slice 列表持久化，用户可通过"重试失败批次"按钮触发 retryFailedBatchesForSession
+      failedBatches,
     })
 
     reportProgress(
@@ -2128,6 +2339,400 @@ export async function startUnifiedExtraction(
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
     logAnalysis('error', `Extraction FAILED for session=${sessionId} jobId=${job.id}: ${errMsg}`)
+    extractionJobService.failJob(job.id, 'UNIFIED_EXTRACTION_ERROR', errMsg)
+    win.webContents.send('collab:extractionError', {
+      jobId: job.id,
+      sessionId,
+      jobType: 'all',
+      error: errMsg,
+    })
+  }
+}
+
+/**
+ * v0.17.10: 手动重试上次分析里失败的批次。
+ *
+ * 触发条件：用户点了前端的"重试失败批次 (N)"按钮，IPC 把 sessionId 传到这里。
+ *
+ * 工作流：
+ *   1. 读最新一次 done 状态的 'all' job 的 resultSummary.failedBatches
+ *   2. 没失败 → 直接返回（不创建新 job）
+ *   3. 有失败 → createJob('all', forceRerun=false)，preflight，按 messageId 范围
+ *      重新 fetch 对应消息，丢给 processBatchWithRetry 走 B+A 完整重试链
+ *   4. 仍失败的 slice 累计到新 job 的 resultSummary.failedBatches，让用户能再次重试
+ *   5. 全部 ok 的 slice 立刻 saveOneBatch + 发 batchDone 给前端实时刷新
+ *   6. finishJob with batchSummary（前端 toast 会按部分失败/全成功决定弹哪种）
+ *
+ * 注意：retry 流程不需要 forceRerun，也不更新 lastAnalyzedMessageId（旧 job 的
+ * lastAnalyzedMessageId 已经是 max，新 job 只是收尾的修补，不应回退基线）。
+ */
+export async function retryFailedBatchesForSession(
+  sessionId: string,
+  win: BrowserWindow,
+  globalNicknames: string[] = []
+): Promise<void> {
+  logAnalysis('info', `retryFailedBatchesForSession ENTRY: sessionId=${sessionId} nicknames=[${globalNicknames.join(', ')}]`)
+
+  const lastDone = extractionJobService.getLatestDoneJob(sessionId, 'all')
+  if (!lastDone) {
+    logAnalysis('warn', `retryFailedBatchesForSession: 没有 done 的 all job, 没法重试`)
+    return
+  }
+
+  const prevSummary = (lastDone.resultSummary || {}) as Record<string, unknown>
+  const prevFailed = (prevSummary.failedBatches as FailedBatch[] | undefined) ?? []
+  if (prevFailed.length === 0) {
+    logAnalysis('info', `retryFailedBatchesForSession: 没有失败批次需要重试`)
+    return
+  }
+
+  const job = await extractionJobService.createJob(sessionId, 'all', false)
+  let highestProgress = 0
+  function reportProgress(progress: number, message: string) {
+    const clamped = Math.min(100, Math.max(0, progress))
+    if (clamped < highestProgress && clamped < 100) return
+    highestProgress = Math.max(highestProgress, clamped)
+    sendUnifiedProgress(win, job.id, sessionId, highestProgress, message)
+  }
+
+  if (
+    !(await preflightAndStart(job, win, sessionId, 'all', () =>
+      reportProgress(2, '正在检测 LLM 连通性...')
+    ))
+  )
+    return
+
+  reportProgress(5, `准备重试 ${prevFailed.length} 个失败批次...`)
+
+  try {
+    // 拉全部消息一次性，按 id 范围切出每个失败 batch 的消息
+    const { messages: rawMessages } = await getAllRecentMessages(sessionId, undefined, 999999)
+    const allMessages: ChatMessage[] = rawMessages.map((m: any) => ({
+      id: m.id,
+      senderName: m.senderName || m.sender_name || '未知',
+      content: m.content || '',
+      timestamp: m.timestamp || m.ts || 0,
+    }))
+
+    const idIndex = new Map<number, number>()
+    for (let i = 0; i < allMessages.length; i++) idIndex.set(allMessages[i].id, i)
+
+    let savedTasks = 0,
+      mergedTasks = 0,
+      savedTodos = 0,
+      skippedTodos = 0,
+      savedFocus = 0,
+      skippedFocus = 0,
+      savedFaqs = 0,
+      savedConcepts = 0,
+      savedDocuments = 0,
+      savedProcedures = 0,
+      savedTips = 0,
+      savedNodes = 0,
+      savedEdges = 0
+    const stillFailed: FailedBatch[] = []
+
+    // 复用 startUnifiedExtraction 里相同的去重缓存（faq/knowledge）
+    const existingFaqTitleSet = new Set<string>(
+      knowledgeService.queryItems({ type: ['faq'] }).map((f) => f.title.toLowerCase().trim())
+    )
+    const existingKnowledgeTitleSets = {
+      concept: new Set(knowledgeService.queryItems({ type: ['concept'] }).map((k) => k.title.toLowerCase().trim())),
+      document: new Set(knowledgeService.queryItems({ type: ['document'] }).map((k) => k.title.toLowerCase().trim())),
+      procedure: new Set(knowledgeService.queryItems({ type: ['procedure'] }).map((k) => k.title.toLowerCase().trim())),
+      tip: new Set(knowledgeService.queryItems({ type: ['tip'] }).map((k) => k.title.toLowerCase().trim())),
+    } as const
+
+    for (let i = 0; i < prevFailed.length; i++) {
+      const fb = prevFailed[i]
+      const startIdx = idIndex.get(fb.startMessageId)
+      const endIdx = idIndex.get(fb.endMessageId)
+      if (startIdx === undefined || endIdx === undefined) {
+        // messages 已被删除或会话变化；保留原 failedBatch entry 让用户知道
+        logAnalysis(
+          'warn',
+          `retry: failedBatch [${fb.startMessageId}..${fb.endMessageId}] 在当前 messages 里找不到，跳过`
+        )
+        stillFailed.push(fb)
+        continue
+      }
+      const sliceMsgs = allMessages.slice(startIdx, endIdx + 1)
+      reportProgress(
+        Math.floor(10 + (75 * (i + 0.5)) / prevFailed.length),
+        `重试批次 ${i + 1}/${prevFailed.length}（${sliceMsgs.length} 条）`
+      )
+
+      const result = await processBatchWithRetry(
+        sliceMsgs,
+        0,
+        sliceMsgs.length,
+        ({ toolTokens, label }) => {
+          const progress = Math.min(85, 10 + Math.floor((75 * (i + 1)) / prevFailed.length))
+          reportProgress(progress, `重试 ${i + 1}/${prevFailed.length} · ${label} · ${toolTokens} 字符`)
+        },
+        globalNicknames
+      )
+
+      // save 成功的 slice
+      for (const slice of result.successfulSlices) {
+        // 复用 saveOneBatch 的内联逻辑会很重，这里直接用本函数内的小型 save 路径，
+        // 但完全相同的去重原则。为减重，在这里简单调用 inline save
+        // —— 实际上 saveOneBatch 是 startUnifiedExtraction 内部闭包，无法在外面调用，
+        // 所以下面是手动 inline，避免再去暴露/重构闭包接口。
+
+        const r = slice.result
+        const batchFirstMsgTs = slice.msgs[0]?.timestamp ?? Math.floor(Date.now() / 1000)
+        const batchFirstMsgId = slice.msgs[0]?.id ?? 0
+
+        // tasks
+        for (const task of r.tasks) {
+          try {
+            const existingId = taskService.findIdByNormalizedTitle(task.title)
+            if (existingId != null) {
+              taskService.addTaskSource(existingId, sessionId, batchFirstMsgId, batchFirstMsgTs, task.confidence)
+              mergedTasks++
+              continue
+            }
+            const taskId = taskService.createTask({
+              title: task.title,
+              description: task.description,
+              status: 'pending',
+              priority: task.priority || 'normal',
+              ownerDisplayName: task.ownerName,
+              dueTs: (() => {
+                if (!task.dueDate) return undefined
+                const ts = new Date(task.dueDate).getTime()
+                return isNaN(ts) ? undefined : ts
+              })(),
+              confidence: task.confidence,
+              isManual: false,
+              tags: [],
+              metadata: { sessionId },
+            })
+            taskService.addTaskSource(taskId, sessionId, batchFirstMsgId, batchFirstMsgTs, task.confidence)
+            savedTasks++
+          } catch (err) {
+            console.error('[retryFailedBatches] save task:', err)
+          }
+        }
+        // todos
+        for (const todo of r.todos) {
+          try {
+            if (todoService.findIdByNormalizedTitle('system', todo.title) != null) {
+              skippedTodos++
+              continue
+            }
+            const requesterPrefix = todo.requesterName ? `来自 ${todo.requesterName}：` : ''
+            const mentionTag =
+              todo.mentionType === 'at_me' ? '[@我]' : todo.mentionType === 'name_me' ? '[点名]' : ''
+            const desc = [requesterPrefix + (todo.description || ''), mentionTag]
+              .filter((s) => s.trim())
+              .join(' ')
+              .trim()
+            todoService.createTodo({
+              globalUserId: 'system',
+              title: todo.title,
+              description: desc || undefined,
+              status: 'pending',
+              priority: 'normal',
+              progress: 0,
+              tags: todo.mentionType ? [todo.mentionType] : [],
+              isStarred: false,
+              sourceType: 'manual',
+              sourceSessionId: sessionId,
+            })
+            savedTodos++
+          } catch (err) {
+            console.error('[retryFailedBatches] save todo:', err)
+          }
+        }
+        // focus
+        for (const item of r.focus) {
+          try {
+            const userId = item.watcher || 'system'
+            if (focusService.findIdByNormalizedTitle(userId, item.type, item.title) != null) {
+              skippedFocus++
+              continue
+            }
+            focusService.createFocusItem({
+              globalUserId: userId,
+              type: item.type,
+              title: item.title,
+              description: item.description,
+              keywords: item.keywords,
+              status: 'active',
+              lastActivityTs: Date.now(),
+            })
+            savedFocus++
+          } catch (err) {
+            console.error('[retryFailedBatches] save focus:', err)
+          }
+        }
+        // faqs
+        for (const faq of r.faqs) {
+          try {
+            const newTitle = faq.question.toLowerCase().trim()
+            if (existingFaqTitleSet.has(newTitle)) continue
+            knowledgeService.createItem({
+              type: 'faq',
+              title: faq.question,
+              content: faq.answer,
+              category: faq.category,
+              tags: [],
+              sourceSessionIds: [sessionId],
+              sourceMessageRefs: [],
+              confidence: faq.confidence,
+              isEdited: false,
+              status: 'active',
+            })
+            existingFaqTitleSet.add(newTitle)
+            savedFaqs++
+          } catch (err) {
+            console.error('[retryFailedBatches] save faq:', err)
+          }
+        }
+        // knowledge × 4
+        const saveK = (
+          items: ExtractedKnowledge[],
+          kType: 'concept' | 'document' | 'procedure' | 'tip'
+        ): number => {
+          let cnt = 0
+          const titleSet = existingKnowledgeTitleSets[kType]
+          for (const k of items) {
+            try {
+              const norm = k.title.toLowerCase().trim()
+              if (titleSet.has(norm)) continue
+              knowledgeService.createItem({
+                type: kType,
+                title: k.title,
+                content: k.content,
+                category: k.category,
+                tags: [],
+                sourceSessionIds: [sessionId],
+                sourceMessageRefs: [],
+                confidence: k.confidence,
+                isEdited: false,
+                status: 'active',
+              })
+              titleSet.add(norm)
+              cnt++
+            } catch (err) {
+              console.error(`[retryFailedBatches] save ${kType}:`, err)
+            }
+          }
+          return cnt
+        }
+        savedConcepts += saveK(r.concepts, 'concept')
+        savedDocuments += saveK(r.documents, 'document')
+        savedProcedures += saveK(r.procedures, 'procedure')
+        savedTips += saveK(r.tips, 'tip')
+        // graph
+        if (r.graph.entities.length > 0 || r.graph.relationships.length > 0) {
+          try {
+            const g = await saveGraphData(r.graph.entities, r.graph.relationships, sessionId, slice.msgs)
+            savedNodes += g.savedNodes
+            savedEdges += g.savedEdges
+          } catch (err) {
+            console.error('[retryFailedBatches] save graph:', err)
+          }
+        }
+
+        // 实时刷新事件
+        win.webContents.send('collab:extractionBatchDone', {
+          jobId: job.id,
+          sessionId,
+          jobType: 'all',
+          batchIndex: i,
+          batchLabel: `retry-${i + 1}`,
+          updatedTypes: ['tasks', 'todos', 'focus', 'faqs', 'knowledge', 'graph'],
+          cumulative: {
+            tasksExtracted: savedTasks,
+            todosExtracted: savedTodos,
+            focusExtracted: savedFocus,
+            faqExtracted: savedFaqs,
+            conceptsExtracted: savedConcepts,
+            documentsExtracted: savedDocuments,
+            proceduresExtracted: savedProcedures,
+            tipsExtracted: savedTips,
+            nodesExtracted: savedNodes,
+            edgesExtracted: savedEdges,
+          },
+        })
+      }
+
+      // 仍失败的 slice 累计进 stillFailed
+      for (const failure of result.failureSlices) {
+        if (failure.coreMsgs.length === 0) continue
+        stillFailed.push({
+          startMessageId: failure.coreMsgs[0].id,
+          endMessageId: failure.coreMsgs[failure.coreMsgs.length - 1].id,
+          messageCount: failure.coreMsgs.length,
+          lastError: failure.lastError,
+          lastStatus: failure.status,
+          attempts: (fb.attempts ?? 0) + failure.attempts,
+        })
+      }
+    }
+
+    // 用旧 summary 做 base，只更新 failedBatches 和保存计数（不动 lastAnalyzedMessageId）
+    extractionJobService.finishJob(job.id, {
+      ...prevSummary,
+      tasksExtracted: ((prevSummary.tasksExtracted as number) || 0) + savedTasks,
+      todosExtracted: ((prevSummary.todosExtracted as number) || 0) + savedTodos,
+      focusExtracted: ((prevSummary.focusExtracted as number) || 0) + savedFocus,
+      faqExtracted: ((prevSummary.faqExtracted as number) || 0) + savedFaqs,
+      conceptsExtracted: ((prevSummary.conceptsExtracted as number) || 0) + savedConcepts,
+      documentsExtracted: ((prevSummary.documentsExtracted as number) || 0) + savedDocuments,
+      proceduresExtracted: ((prevSummary.proceduresExtracted as number) || 0) + savedProcedures,
+      tipsExtracted: ((prevSummary.tipsExtracted as number) || 0) + savedTips,
+      nodesExtracted: ((prevSummary.nodesExtracted as number) || 0) + savedNodes,
+      edgesExtracted: ((prevSummary.edgesExtracted as number) || 0) + savedEdges,
+      failedBatches: stillFailed,
+      retryStats: {
+        attemptedBatches: prevFailed.length,
+        succeededBatches: prevFailed.length - stillFailed.length,
+        stillFailedBatches: stillFailed.length,
+      },
+    })
+
+    reportProgress(
+      100,
+      `重试完成：原 ${prevFailed.length} 批失败，恢复 ${prevFailed.length - stillFailed.length}，仍失败 ${stillFailed.length}`
+    )
+    win.webContents.send('collab:extractionDone', {
+      jobId: job.id,
+      sessionId,
+      jobType: 'all',
+      result: {
+        tasksExtracted: savedTasks,
+        todosExtracted: savedTodos,
+        focusExtracted: savedFocus,
+        faqExtracted: savedFaqs,
+        conceptsExtracted: savedConcepts,
+        documentsExtracted: savedDocuments,
+        proceduresExtracted: savedProcedures,
+        tipsExtracted: savedTips,
+        nodesExtracted: savedNodes,
+        edgesExtracted: savedEdges,
+      },
+      batchSummary: {
+        total: prevFailed.length,
+        ok: prevFailed.length - stillFailed.length,
+        aborted: 0,
+        error: 0,
+        noToolCall: 0,
+        partialFailure: stillFailed.length > 0,
+      },
+      retry: true,
+    })
+
+    logAnalysis(
+      'info',
+      `✅ Retry DONE: ${prevFailed.length - stillFailed.length}/${prevFailed.length} batches recovered, ${stillFailed.length} still failed`
+    )
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error)
+    logAnalysis('error', `Retry FAILED: ${errMsg}`)
     extractionJobService.failJob(job.id, 'UNIFIED_EXTRACTION_ERROR', errMsg)
     win.webContents.send('collab:extractionError', {
       jobId: job.id,
