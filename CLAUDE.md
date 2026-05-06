@@ -20,7 +20,7 @@ pnpm type-check:node      # Type-check main/preload only
 pnpm type-check:web       # Type-check renderer only
 
 # 测试
-pnpm test:unit                  # Node native test: formatError + preflightReason (pure fns)
+pnpm test:unit                  # Node native test: formatError + preflightReason + pickAllFailedReason (pure fns, 29 cases)
 pnpm test:e2e                   # Playwright, all specs
 pnpm test:e2e:ui                # Playwright UI mode
 pnpm test:e2e:headed            # Non-headless
@@ -30,7 +30,25 @@ pnpm test:regression            # = test:unit + test:e2e:regression（主回归�
 
 # AI smoke（opt-in，消耗真实 LLM 配额 + 写用户 DB，仅手动运行）
 CHATLAB_E2E_USE_SYSTEM=1 pnpm test:e2e:ai-regression
+
+# 打包
+pnpm build:win                  # Windows installer + win-unpacked
+pnpm build:mac                  # macOS dmg
+
+# 发版前必跑：asar 漏打扫描（v0.17.5 起，详见 memory/packaging-checklist.md）
+pnpm ls --prod --depth=Infinity --json > prod_tree.json
+npx asar list dist/win-unpacked/resources/app.asar > asar_list.txt
+python3 scripts/find-runtime-gaps.py
+# 必须输出 Total: 0；非 0 时按脚本输出 pnpm add 命令补齐再重 build:win
 ```
+
+## Release / Packaging（重要）
+
+**`package.json` 的 `dependencies` 字段在 v0.17.10 已膨胀到 126 个**（vs 历史上的 ~30 个）。**绝大多数都是 transitive deps**，被 electron-builder 漏遍历后 hoist 到顶层成"看似多余"，实则缺一个就崩一个版本（v0.14 的 `ms`、v0.17.4 的 `jwa` 都是这个剧本）。
+
+**不要 `pnpm prune`、不要"清理无用依赖"**。每个直接 prod dep 都是过去某次踩坑后补的。删除前**必须**跑 `pnpm build:win` + `python3 scripts/find-runtime-gaps.py`，输出非 0 就立刻撤回。
+
+**发版到 GitHub** 必须显式 `gh release create v0.X.Y --repo l17728/ChatLab ...`（gh CLI 默认指向 fork parent ChatLab/ChatLab，会报 workflow scope 错）。完整流程见 `memory/release-process.md`。
 
 ## Architecture
 
